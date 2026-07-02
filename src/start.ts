@@ -1,7 +1,6 @@
 import { createStart, createMiddleware } from "@tanstack/react-start";
-
 import { renderErrorPage } from "./lib/error-page";
-import { attachSupabaseAuth } from "@/integrations/supabase/auth-attacher";
+
 
 const errorMiddleware = createMiddleware().server(async ({ next }) => {
   try {
@@ -18,7 +17,11 @@ const errorMiddleware = createMiddleware().server(async ({ next }) => {
   }
 });
 
+// SQLite-backed cookie session (see src/lib/auth.server.ts). Supabase n'est
+// pas utilisé par cette app — on n'enregistre donc PAS attachSupabaseAuth,
+// sinon son appel à supabase.auth.getSession() plante côté client en Docker
+// quand les VITE_SUPABASE_* ne sont pas définis, ce qui casse toutes les
+// serverFn (signIn, me, signOut, …).
 export const startInstance = createStart(() => ({
-  functionMiddleware: [attachSupabaseAuth],
   requestMiddleware: [errorMiddleware],
 }));
