@@ -35,7 +35,7 @@ function ActionsPage() {
 
   const update = useMutation({
     mutationFn: async ({ id, ...patch }: { id: string; responsible?: string | null; due_date?: string | null; status?: string }) => {
-      const body: Record<string, unknown> = { ...patch };
+      const body: { responsible?: string | null; due_date?: string | null; status?: string; completed_at?: string } = { ...patch };
       if (patch.status === "done") body.completed_at = new Date().toISOString();
       await supabase.from("corrective_actions").update(body).eq("id", id);
     },
