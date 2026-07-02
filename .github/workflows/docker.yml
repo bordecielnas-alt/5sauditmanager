@@ -3,22 +3,41 @@ name: build-and-push
 on:
   push:
     branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
 
 jobs:
   docker:
     runs-on: ubuntu-latest
+    env:
+      REGISTRY: ${{ vars.REGISTRY || 'ghcr.io' }}
+      IMAGE_NAME: ${{ vars.IMAGE_NAME || format('{0}/audit-5s', github.repository_owner) }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
+
       - uses: docker/setup-buildx-action@v3
-      - uses: docker/login-action@v3
+
+      # Log in to GHCR by default using the built-in GITHUB_TOKEN.
+      # For Docker Hub or another registry, set repo variables REGISTRY + IMAGE_NAME
+      # and repo secrets REGISTRY_USERNAME + REGISTRY_PASSWORD.
+      - name: Log in to registry
+        uses: docker/login-action@v3
         with:
-          registry: ${{ secrets.REGISTRY || 'docker.io' }}
-          username: ${{ secrets.REGISTRY_USERNAME }}
-          password: ${{ secrets.REGISTRY_PASSWORD }}
+          registry: ${{ env.REGISTRY }}
+          username: ${{ secrets.REGISTRY_USERNAME || github.actor }}
+          password: ${{ secrets.REGISTRY_PASSWORD || secrets.GITHUB_TOKEN }}
+
+      - name: Lowercase image name
+        id: img
+        run: echo "name=$(echo '${{ env.IMAGE_NAME }}' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_OUTPUT
+
       - uses: docker/build-push-action@v6
         with:
           context: .
           push: true
           tags: |
-            ${{ secrets.IMAGE_NAME || 'yourorg/audit-5s' }}:latest
-            ${{ secrets.IMAGE_NAME || 'yourorg/audit-5s' }}:${{ github.sha }}
+            ${{ env.REGISTRY }}/${{ steps.img.outputs.name }}:latest
+            ${{ env.REGISTRY }}/${{ steps.img.outputs.name }}:${{ github.sha }}
