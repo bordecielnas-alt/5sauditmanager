@@ -17,7 +17,6 @@ const errorMiddleware = createMiddleware().server(async ({ next }) => {
   }
 });
 
-// 
 // SQLite-backed cookie session (see src/lib/auth.server.ts). Supabase n'est
 // pas utilisé par cette app — on n'enregistre donc PAS attachSupabaseAuth,
 // sinon son appel à supabase.auth.getSession() plante côté client en Docker
