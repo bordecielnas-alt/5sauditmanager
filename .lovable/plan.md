@@ -1,63 +1,38 @@
-## Problème
+## Plan
 
-L'app est **TanStack Start (SSR)**, pas une SPA statique. Le `Dockerfile` actuel :
-1. Copie les assets JS/CSS dans nginx
-2. Génère un `index.html` bidon avec `<body></body>` vide
+Adapter le déploiement Docker de cette app sur la même logique que WealthTracker, qui fonctionne : un serveur TanStack Start SSR derrière nginx, piloté par supervisor.
 
-Résultat : le JS se charge mais il n'y a **aucun élément à hydrater** (TanStack Start rend `<html><body>` via `shellComponent`, il n'y a pas de `<div id="root">`). Page blanche garantie.
+### 1. Reprendre l’architecture Docker WealthTracker
+- Remplacer le runtime Docker actuel `node:20-alpine` direct par un runtime Debian slim avec `nginx` + `supervisor`.
+- Construire l’app avec `node:20-bookworm-slim` + Bun, comme WealthTracker.
+- Copier `.output` dans l’image runtime.
+- Exposer le port `80` côté conteneur, comme avant côté Unraid.
 
-Nginx statique **ne peut pas** servir cette app — il faut un runtime Node/Bun qui exécute le serveur SSR généré dans `.output/server/index.mjs`.
+### 2. Ajouter les fichiers de runtime manquants
+- Recréer `nginx.conf` pour proxyfier toutes les routes vers le serveur SSR sur `127.0.0.1:3000`.
+- Ajouter `supervisord.conf` pour lancer :
+  - le serveur Node SSR `.output/server/index.mjs`
+  - nginx en frontal
+- Garder les headers proxy nécessaires (`Host`, `X-Forwarded-*`, websocket upgrade, timeout).
 
-## Solution : Docker Node + SSR (garder le même workflow build/push)
+### 3. Forcer proprement le build Node dans Vite/Nitro
+- Ajouter dans `vite.config.ts` la config équivalente à WealthTracker :
+  - `tanstackStart.server.entry = "server"`
+  - `nitro.preset = "node-server"`
+- Retirer la dépendance au seul `ENV NITRO_PRESET=node-server` dans le Dockerfile si la config Vite suffit.
 
-### 1. Nouveau `Dockerfile`
+### 4. Corriger l’écart `src/start.ts`
+- Remettre `src/start.ts` comme WealthTracker : ne pas enregistrer `attachSupabaseAuth` dans `functionMiddleware`.
+- Raison : dans le conteneur Docker, ce middleware peut appeler le client auth côté navigateur et casser les server functions si les variables publiques ne sont pas injectées exactement comme dans Lovable.
 
-```dockerfile
-# Build stage
-FROM oven/bun:1-alpine AS builder
-WORKDIR /app
-COPY package.json bun.lock* ./
-RUN bun install --frozen-lockfile
-COPY . .
-RUN bun run build
+### 5. Dockerignore optionnel
+- Ajouter un `.dockerignore` proche de WealthTracker si absent, pour éviter d’envoyer `node_modules`, `.env`, `.lovable`, logs, etc. au build Docker.
 
-# Runtime stage
-FROM oven/bun:1-alpine
-WORKDIR /app
-COPY --from=builder /app/.output ./.output
-COPY --from=builder /app/package.json ./
-ENV NODE_ENV=production
-ENV PORT=3000
-ENV HOST=0.0.0.0
-EXPOSE 3000
-CMD ["bun", "run", ".output/server/index.mjs"]
-```
+### À appliquer côté Unraid après rebuild
+- Si on reprend exactement WealthTracker : mapping `port hôte -> 80 conteneur`.
+- Exemple : `7818:80`, pas `7818:3000`.
 
-Note : le build TanStack Start (nitro) produit `.output/server/index.mjs` (serveur) + `.output/public` (assets). Le serveur sert les deux.
-
-### 2. Supprimer `nginx.conf`
-
-Plus utilisé.
-
-### 3. Workflow `.github/workflows/docker.yml`
-
-Aucun changement — le build & push d'image continue à fonctionner. Le port exposé passe de `80` → `3000` (à répercuter dans le mapping de port du conteneur côté Unraid : `-p 7818:3000`).
-
-### 4. Variables d'environnement runtime
-
-Sur le conteneur (Unraid), ajouter :
-- `VITE_SUPABASE_URL=https://fxsakgzcmonokvlwlwyz.supabase.co`
-- `VITE_SUPABASE_PUBLISHABLE_KEY=sb_publishable_BfU4re-LBCXeZlp2UhXR1w_gCi8PCzo`
-- `SUPABASE_URL=…` et `SUPABASE_PUBLISHABLE_KEY=…` (mêmes valeurs, côté SSR)
-
-Sans ça, la page rendra mais les appels Supabase échoueront.
-
-## Ce que ça corrige
-
-- Page blanche → le SSR renvoie un HTML complet, React s'hydrate
-- Routing SSR (deep-link `/audits`, `/audits/:id`) fonctionne côté serveur
-- Les server functions (si un jour ajoutées) continueront de marcher
-
-## Alternative rejetée
-
-Convertir l'app en SPA pure (Vite `build` classique, sans TanStack Start SSR) : demande de réécrire `router.tsx`, `__root.tsx`, retirer `shellComponent`, changer la config Vite. Beaucoup plus invasif pour un simple problème de déploiement.
+## Résultat attendu
+- Le conteneur affiche des logs supervisor/nginx + serveur SSR.
+- Les routes `/`, `/audits`, `/machines`, etc. renvoient du HTML SSR complet, pas une page vide.
+- Le comportement Docker devient cohérent avec WealthTracker.
