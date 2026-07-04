@@ -1,6 +1,5 @@
 import { createStart, createMiddleware } from "@tanstack/react-start";
 import { renderErrorPage } from "./lib/error-page";
-import { attachSupabaseAuth } from "@/integrations/supabase/auth-attacher";
 
 
 const errorMiddleware = createMiddleware().server(async ({ next }) => {
@@ -24,6 +23,5 @@ const errorMiddleware = createMiddleware().server(async ({ next }) => {
 // quand les VITE_SUPABASE_* ne sont pas définis, ce qui casse toutes les
 // serverFn (signIn, me, signOut, …).
 export const startInstance = createStart(() => ({
-  functionMiddleware: [attachSupabaseAuth],
   requestMiddleware: [errorMiddleware],
 }));

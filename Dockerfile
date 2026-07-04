@@ -1,20 +1,40 @@
-# Build stage — TanStack Start SSR build with Node server preset
-FROM oven/bun:1-alpine AS builder
+# syntax=docker/dockerfile:1.7
+
+# ---------- build stage ----------
+FROM node:20-bookworm-slim AS build
 WORKDIR /app
+
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends ca-certificates \
+  && rm -rf /var/lib/apt/lists/*
+
+RUN npm install -g bun@1.3.3
+
 COPY package.json bun.lock* ./
 RUN bun install --frozen-lockfile
 COPY . .
-# Force nitro to build a standalone Node server (default preset in the
-# Lovable vite plugin is cloudflare workers, which won't run under Docker).
-ENV NITRO_PRESET=node-server
 RUN bun run build
 
-# Runtime stage
-FROM node:20-alpine
+# ---------- runtime stage ----------
+FROM node:20-bookworm-slim AS runtime
 WORKDIR /app
-COPY --from=builder /app/.output ./.output
+
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends nginx supervisor ca-certificates tzdata \
+  && rm -rf /var/lib/apt/lists/* \
+  && rm -f /etc/nginx/sites-enabled/default
+
+ENV TZ=Europe/Paris
+RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
+
 ENV NODE_ENV=production
 ENV PORT=3000
-ENV HOST=0.0.0.0
-EXPOSE 3000
-CMD ["node", ".output/server/index.mjs"]
+ENV HOST=127.0.0.1
+
+COPY --from=build /app/.output ./.output
+COPY nginx.conf /etc/nginx/conf.d/audit-5s.conf
+COPY supervisord.conf /etc/supervisord.conf
+
+EXPOSE 80
+
+CMD ["supervisord", "-c", "/etc/supervisord.conf"]

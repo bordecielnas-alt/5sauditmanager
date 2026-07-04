@@ -1,0 +1,14 @@
+node_modules
+.git
+.gitignore
+dist
+.data
+.lovable
+.env
+.env.*
+*.log
+.DS_Store
+README.md
+tsconfig.tsbuildinfo
+.sandbox-build
+.tanstack
