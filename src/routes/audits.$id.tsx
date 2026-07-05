@@ -1,5 +1,6 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useServerFn } from "@tanstack/react-start";
 import { AppLayout } from "@/components/AppLayout";
 import { PageHeader } from "@/components/PageHeader";
 import { Button } from "@/components/ui/button";
@@ -8,12 +9,17 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Checkbox } from "@/components/ui/checkbox";
-import { supabase } from "@/integrations/supabase/client";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { PhotoUploader, type PhotoItem } from "@/components/PhotoUploader";
+import {
+  getAudit, updateAuditHeader, saveResponse, completeAudit,
+  listHierarchy, listReferential, previousAuditContext,
+} from "@/lib/api.functions";
 import { pct, scoreBg, scoreText, SCORE_THRESHOLD } from "@/lib/scoring";
 import { toast } from "sonner";
-import { ArrowLeft, Check } from "lucide-react";
+import { ArrowLeft, Check, ChevronDown, History } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import { format, parseISO } from "date-fns";
 
 export const Route = createFileRoute("/audits/$id")({ component: AuditEditor });
 
@@ -21,97 +27,48 @@ function AuditEditor() {
   const { id } = Route.useParams();
   const qc = useQueryClient();
 
-  const { data } = useQuery({
-    queryKey: ["audit", id],
-    queryFn: async () => {
-      const [audit, workshops, zones, machines, auditMachines, criteria, questions, responses] = await Promise.all([
-        supabase.from("audits").select("*").eq("id", id).maybeSingle(),
-        supabase.from("workshops").select("*").order("name"),
-        supabase.from("zones").select("*"),
-        supabase.from("machines").select("*"),
-        supabase.from("audit_machines").select("*").eq("audit_id", id),
-        supabase.from("criteria").select("*").order("order_index"),
-        supabase.from("questions").select("*").order("order_index"),
-        supabase.from("audit_responses").select("*").eq("audit_id", id),
-      ]);
-      return {
-        audit: audit.data,
-        workshops: workshops.data ?? [],
-        zones: zones.data ?? [],
-        machines: machines.data ?? [],
-        auditMachines: auditMachines.data ?? [],
-        criteria: criteria.data ?? [],
-        questions: questions.data ?? [],
-        responses: responses.data ?? [],
-      };
-    },
-  });
+  const getAuditFn = useServerFn(getAudit);
+  const listHierFn = useServerFn(listHierarchy);
+  const listRefFn = useServerFn(listReferential);
+  const prevCtxFn = useServerFn(previousAuditContext);
+  const updateHeaderFn = useServerFn(updateAuditHeader);
+  const saveRespFn = useServerFn(saveResponse);
+  const completeFn = useServerFn(completeAudit);
 
-  const [form, setForm] = useState<{ audit_date: string; workshop_id: string | null; zone_id: string | null; auditor: string }>({
-    audit_date: "", workshop_id: null, zone_id: null, auditor: "",
-  });
+  const { data: current } = useQuery({ queryKey: ["audit", id], queryFn: () => getAuditFn({ data: { id } }) });
+  const { data: hier } = useQuery({ queryKey: ["hierarchy"], queryFn: () => listHierFn() });
+  const { data: ref } = useQuery({ queryKey: ["referential"], queryFn: () => listRefFn() });
+  const { data: prev } = useQuery({ queryKey: ["prev-audit", id], queryFn: () => prevCtxFn({ data: { audit_id: id } }) });
+
+  const [form, setForm] = useState({ audit_date: "", site_id: "", uap_id: "", gap_id: "", auditor: "" });
   useEffect(() => {
-    if (data?.audit) setForm({
-      audit_date: data.audit.audit_date,
-      workshop_id: data.audit.workshop_id,
-      zone_id: data.audit.zone_id,
-      auditor: data.audit.auditor,
+    if (current?.audit) setForm({
+      audit_date: current.audit.audit_date,
+      site_id: current.audit.site_id ?? "",
+      uap_id: current.audit.uap_id ?? "",
+      gap_id: current.audit.gap_id ?? "",
+      auditor: current.audit.auditor,
     });
-  }, [data?.audit]);
+  }, [current?.audit]);
 
-  const zones = useMemo(
-    () => (data?.zones ?? []).filter((z) => !form.workshop_id || z.workshop_id === form.workshop_id),
-    [data?.zones, form.workshop_id],
-  );
-  const machinesInZone = useMemo(
-    () => (data?.machines ?? []).filter((m) => m.zone_id === form.zone_id),
-    [data?.machines, form.zone_id],
-  );
-  const selectedMachineIds = new Set((data?.auditMachines ?? []).map((am) => am.machine_id));
+  const uaps = useMemo(() => (hier?.uaps ?? []).filter((u) => u.site_id === form.site_id), [hier, form.site_id]);
+  const gaps = useMemo(() => (hier?.gaps ?? []).filter((g) => g.uap_id === form.uap_id), [hier, form.uap_id]);
 
   const saveHeader = useMutation({
-    mutationFn: async () => {
-      const { error } = await supabase.from("audits").update({
-        audit_date: form.audit_date,
-        workshop_id: form.workshop_id,
-        zone_id: form.zone_id,
-        auditor: form.auditor,
-      }).eq("id", id);
-      if (error) throw error;
-    },
-    onSuccess: () => { toast.success("Enregistré"); qc.invalidateQueries({ queryKey: ["audit", id] }); },
+    mutationFn: async () => updateHeaderFn({ data: { id, ...form } }),
+    onSuccess: () => { toast.success("Enregistré"); qc.invalidateQueries({ queryKey: ["audit", id] }); qc.invalidateQueries({ queryKey: ["prev-audit", id] }); },
   });
 
-  const toggleMachine = useMutation({
-    mutationFn: async ({ machineId, checked }: { machineId: string; checked: boolean }) => {
-      if (checked) await supabase.from("audit_machines").insert({ audit_id: id, machine_id: machineId });
-      else await supabase.from("audit_machines").delete().eq("audit_id", id).eq("machine_id", machineId);
-    },
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["audit", id] }),
-  });
-
-  const saveResponse = useMutation({
-    mutationFn: async (r: { question_id: string; criteria_id: string; score?: number; comment?: string; gap?: string; suggested_action?: string; photo_url?: string }) => {
-      const { error } = await supabase.from("audit_responses").upsert(
-        { audit_id: id, ...r },
-        { onConflict: "audit_id,question_id" },
-      );
-      if (error) throw error;
-    },
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["audit", id] }),
-  });
-
-  // Calcul scores par critère + global
   const scoreByCriteria = useMemo(() => {
     const m: Record<string, { sum: number; n: number }> = {};
-    (data?.responses ?? []).forEach((r) => {
+    (current?.responses ?? []).forEach((r) => {
       if (r.score == null) return;
       m[r.criteria_id] ??= { sum: 0, n: 0 };
       m[r.criteria_id].sum += r.score;
       m[r.criteria_id].n += 1;
     });
     return Object.fromEntries(Object.entries(m).map(([k, v]) => [k, v.sum / v.n]));
-  }, [data?.responses]);
+  }, [current?.responses]);
 
   const globalScore = useMemo(() => {
     const vals = Object.values(scoreByCriteria);
@@ -119,31 +76,29 @@ function AuditEditor() {
   }, [scoreByCriteria]);
 
   const complete = useMutation({
-    mutationFn: async () => {
-      // Enregistrer note globale + statut
-      await supabase.from("audits").update({ global_score: globalScore, status: "completed" }).eq("id", id);
-      // Générer actions correctives pour critères < seuil
-      const weak = (data?.criteria ?? []).filter((c) => (scoreByCriteria[c.id] ?? 0) < SCORE_THRESHOLD && scoreByCriteria[c.id] != null);
-      // Éviter les doublons: on ne crée que si aucune action existante pour (audit, criteria)
-      const existing = await supabase.from("corrective_actions").select("criteria_id").eq("audit_id", id);
-      const existingSet = new Set((existing.data ?? []).map((x) => x.criteria_id));
-      const toInsert = weak
-        .filter((c) => !existingSet.has(c.id))
-        .map((c) => ({
-          audit_id: id,
-          criteria_id: c.id,
-          description: `Améliorer le critère ${c.name} (note ${scoreByCriteria[c.id].toFixed(2)}/5)`,
-          status: "todo",
-        }));
-      if (toInsert.length) await supabase.from("corrective_actions").insert(toInsert);
-    },
+    mutationFn: async () => completeFn({ data: { id } }),
     onSuccess: () => {
-      toast.success("Audit clôturé et actions correctives générées");
+      toast.success("Audit clôturé — actions correctives générées pour les critères faibles");
       qc.invalidateQueries({ queryKey: ["audit", id] });
     },
   });
 
-  if (!data?.audit) return <AppLayout><div className="p-8">Chargement…</div></AppLayout>;
+  if (!current?.audit) return <AppLayout><div className="p-8">Chargement…</div></AppLayout>;
+
+  const prevResponsesByQ = new Map((prev?.responses ?? []).map((r) => [r.question_id, r]));
+  const prevPhotosByR = new Map<string, PhotoItem[]>();
+  (prev?.photos ?? []).forEach((p) => {
+    const arr = prevPhotosByR.get(p.response_id) ?? [];
+    arr.push(p as PhotoItem);
+    prevPhotosByR.set(p.response_id, arr);
+  });
+
+  const photosByResponse = new Map<string, PhotoItem[]>();
+  (current.photos ?? []).forEach((p) => {
+    const arr = photosByResponse.get(p.response_id) ?? [];
+    arr.push(p as PhotoItem);
+    photosByResponse.set(p.response_id, arr);
+  });
 
   return (
     <AppLayout>
@@ -164,26 +119,35 @@ function AuditEditor() {
 
         <Card className="mb-6">
           <CardHeader><CardTitle>Informations</CardTitle></CardHeader>
-          <CardContent className="grid gap-4 md:grid-cols-4">
+          <CardContent className="grid gap-4 md:grid-cols-5">
             <div>
               <Label>Date</Label>
               <Input type="date" value={form.audit_date} onChange={(e) => setForm({ ...form, audit_date: e.target.value })} />
             </div>
             <div>
-              <Label>Atelier</Label>
-              <Select value={form.workshop_id ?? ""} onValueChange={(v) => setForm({ ...form, workshop_id: v, zone_id: null })}>
+              <Label>Site</Label>
+              <Select value={form.site_id} onValueChange={(v) => setForm({ ...form, site_id: v, uap_id: "", gap_id: "" })}>
                 <SelectTrigger><SelectValue placeholder="Choisir…" /></SelectTrigger>
                 <SelectContent>
-                  {data.workshops.map((w) => <SelectItem key={w.id} value={w.id}>{w.name}</SelectItem>)}
+                  {hier?.sites.map((s) => <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>)}
                 </SelectContent>
               </Select>
             </div>
             <div>
-              <Label>Zone</Label>
-              <Select value={form.zone_id ?? ""} onValueChange={(v) => setForm({ ...form, zone_id: v })} disabled={!form.workshop_id}>
+              <Label>UAP</Label>
+              <Select value={form.uap_id} onValueChange={(v) => setForm({ ...form, uap_id: v, gap_id: "" })} disabled={!form.site_id}>
                 <SelectTrigger><SelectValue placeholder="Choisir…" /></SelectTrigger>
                 <SelectContent>
-                  {zones.map((z) => <SelectItem key={z.id} value={z.id}>{z.name}</SelectItem>)}
+                  {uaps.map((u) => <SelectItem key={u.id} value={u.id}>{u.name}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <Label>Gap</Label>
+              <Select value={form.gap_id} onValueChange={(v) => setForm({ ...form, gap_id: v })} disabled={!form.uap_id}>
+                <SelectTrigger><SelectValue placeholder="Choisir…" /></SelectTrigger>
+                <SelectContent>
+                  {gaps.map((g) => <SelectItem key={g.id} value={g.id}>{g.name}</SelectItem>)}
                 </SelectContent>
               </Select>
             </div>
@@ -191,31 +155,19 @@ function AuditEditor() {
               <Label>Auditeur</Label>
               <Input value={form.auditor} onChange={(e) => setForm({ ...form, auditor: e.target.value })} />
             </div>
-
-            {form.zone_id && (
-              <div className="md:col-span-4">
-                <Label className="mb-2 block">Machines auditées</Label>
-                {machinesInZone.length === 0 && <p className="text-sm text-muted-foreground">Aucune machine dans cette zone.</p>}
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-                  {machinesInZone.map((m) => (
-                    <label key={m.id} className="flex items-center gap-2 p-2 border rounded hover:bg-muted/50 cursor-pointer">
-                      <Checkbox
-                        checked={selectedMachineIds.has(m.id)}
-                        onCheckedChange={(c) => toggleMachine.mutate({ machineId: m.id, checked: !!c })}
-                      />
-                      <span className="text-sm">{m.name} <span className="text-muted-foreground">({m.code})</span></span>
-                    </label>
-                  ))}
-                </div>
+            {prev?.audit && (
+              <div className="md:col-span-5 text-xs text-muted-foreground flex items-center gap-2">
+                <History className="h-3 w-3" />
+                Dernier audit sur ce Gap : {format(parseISO(prev.audit.audit_date), "dd/MM/yyyy")}
+                {prev.audit.global_score != null && ` — ${Number(prev.audit.global_score).toFixed(2)}/5`}
               </div>
             )}
           </CardContent>
         </Card>
 
-        {/* Grille d'évaluation */}
         <div className="space-y-4">
-          {data.criteria.map((c) => {
-            const qs = data.questions.filter((q) => q.criteria_id === c.id);
+          {ref?.criteria.map((c) => {
+            const qs = ref.questions.filter((q) => q.criteria_id === c.id);
             const avg = scoreByCriteria[c.id];
             return (
               <Card key={c.id}>
@@ -229,15 +181,25 @@ function AuditEditor() {
                 </CardHeader>
                 <CardContent className="space-y-4">
                   {qs.map((q) => {
-                    const r = data.responses.find((x) => x.question_id === q.id);
+                    const r = current.responses.find((x) => x.question_id === q.id);
+                    const currentPhotos = r ? (photosByResponse.get(r.id) ?? []) : [];
+                    const prevR = prevResponsesByQ.get(q.id);
+                    const prevPhotos = prevR ? (prevPhotosByR.get(prevR.id) ?? []) : [];
                     return (
                       <QuestionRow
                         key={q.id}
-                        question={q.text}
+                        auditId={id}
+                        criteriaId={c.id}
+                        questionId={q.id}
+                        questionText={q.text}
                         response={r}
-                        onChange={(patch) =>
-                          saveResponse.mutate({ question_id: q.id, criteria_id: c.id, ...patch })
-                        }
+                        responseId={r?.id}
+                        currentPhotos={currentPhotos}
+                        prevScore={prevR?.score ?? null}
+                        prevPhotos={prevPhotos}
+                        prevDate={prev?.audit?.audit_date ?? null}
+                        onSave={(patch) => saveRespFn({ data: { audit_id: id, question_id: q.id, criteria_id: c.id, ...patch } }).then(() => qc.invalidateQueries({ queryKey: ["audit", id] }))}
+                        onPhotoChange={() => qc.invalidateQueries({ queryKey: ["audit", id] })}
                       />
                     );
                   })}
@@ -252,40 +214,84 @@ function AuditEditor() {
 }
 
 function QuestionRow({
-  question, response, onChange,
+  auditId, criteriaId, questionId, questionText, response, responseId,
+  currentPhotos, prevScore, prevPhotos, prevDate, onSave, onPhotoChange,
 }: {
-  question: string;
-  response: { score?: number | null; comment?: string | null; gap?: string | null; suggested_action?: string | null; photo_url?: string | null } | undefined;
-  onChange: (patch: { score?: number; comment?: string; gap?: string; suggested_action?: string; photo_url?: string }) => void;
+  auditId: string;
+  criteriaId: string;
+  questionId: string;
+  questionText: string;
+  response: { score: number | null; comment: string | null; gap_text: string | null; suggested_action: string | null } | undefined;
+  responseId: string | undefined;
+  currentPhotos: PhotoItem[];
+  prevScore: number | null;
+  prevPhotos: PhotoItem[];
+  prevDate: string | null;
+  onSave: (patch: { score?: number; comment?: string; gap_text?: string; suggested_action?: string }) => void;
+  onPhotoChange: () => void;
 }) {
   const score = response?.score ?? null;
+  const [openHistory, setOpenHistory] = useState(false);
+  const hasHistory = prevScore != null || prevPhotos.length > 0;
+
   return (
     <div className="border rounded-lg p-3">
       <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
-        <p className="font-medium">{question}</p>
+        <p className="font-medium">{questionText}</p>
         <div className="flex gap-1">
           {[0, 1, 2, 3, 4, 5].map((s) => (
             <button
               key={s}
-              onClick={() => onChange({ score: s })}
+              onClick={() => onSave({ score: s })}
               className={`h-8 w-8 rounded text-sm font-semibold border transition-colors ${
-                score === s
-                  ? scoreBg(s) + " border-transparent"
-                  : "bg-background hover:bg-muted"
+                score === s ? scoreBg(s) + " border-transparent" : "bg-background hover:bg-muted"
               }`}
             >{s}</button>
           ))}
         </div>
       </div>
+
+      {hasHistory && (
+        <Collapsible open={openHistory} onOpenChange={setOpenHistory} className="mb-2">
+          <CollapsibleTrigger className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground">
+            <ChevronDown className={`h-3 w-3 transition-transform ${openHistory ? "rotate-180" : ""}`} />
+            Dernier audit
+            {prevScore != null && <span className={`ml-1 px-1.5 rounded font-semibold ${scoreBg(prevScore)}`}>{prevScore}/5</span>}
+            {prevDate && <span className="opacity-60">· {format(parseISO(prevDate), "dd/MM/yyyy")}</span>}
+            {prevPhotos.length > 0 && <span className="opacity-60">· {prevPhotos.length} photo(s)</span>}
+          </CollapsibleTrigger>
+          <CollapsibleContent className="mt-2 p-2 bg-muted/40 rounded">
+            {prevPhotos.length === 0 && <p className="text-xs text-muted-foreground">Pas de photo lors du dernier audit.</p>}
+            <div className="flex flex-wrap gap-2">
+              {prevPhotos.map((p) => (
+                <div key={p.id} className="w-28">
+                  <img src={`/api/uploads/${p.file_path}`} alt="" className="w-full h-20 object-cover rounded border" />
+                  {p.comment && <div className="text-[10px] text-muted-foreground mt-1 truncate">{p.comment}</div>}
+                </div>
+              ))}
+            </div>
+          </CollapsibleContent>
+        </Collapsible>
+      )}
+
       <div className="grid md:grid-cols-3 gap-2 mt-2">
-        <Textarea placeholder="Commentaire" defaultValue={response?.comment ?? ""} onBlur={(e) => onChange({ comment: e.target.value })} rows={2} />
-        <Textarea placeholder="Écart constaté" defaultValue={response?.gap ?? ""} onBlur={(e) => onChange({ gap: e.target.value })} rows={2} />
-        <Textarea placeholder="Action corrective suggérée" defaultValue={response?.suggested_action ?? ""} onBlur={(e) => onChange({ suggested_action: e.target.value })} rows={2} />
+        <Textarea placeholder="Commentaire" defaultValue={response?.comment ?? ""} onBlur={(e) => onSave({ comment: e.target.value })} rows={2} />
+        <Textarea placeholder="Écart constaté" defaultValue={response?.gap_text ?? ""} onBlur={(e) => onSave({ gap_text: e.target.value })} rows={2} />
+        <Textarea placeholder="Action corrective suggérée" defaultValue={response?.suggested_action ?? ""} onBlur={(e) => onSave({ suggested_action: e.target.value })} rows={2} />
       </div>
-      <div className="mt-2">
-        <Input placeholder="URL de la photo / preuve (optionnel)" defaultValue={response?.photo_url ?? ""} onBlur={(e) => onChange({ photo_url: e.target.value })} />
+
+      <div className="mt-3">
+        <PhotoUploader
+          auditId={auditId}
+          questionId={questionId}
+          criteriaId={criteriaId}
+          responseId={responseId}
+          photos={currentPhotos}
+          onChanged={onPhotoChange}
+        />
       </div>
-      {score != null && score < 3 && (
+
+      {score != null && score < SCORE_THRESHOLD && (
         <p className={`text-xs mt-2 ${scoreText(score)}`}>⚠ Critère faible — une action corrective sera générée à la clôture.</p>
       )}
     </div>
