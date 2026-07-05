@@ -1,12 +1,10 @@
 import { Link, Outlet, useRouterState } from "@tanstack/react-router";
-import { LayoutDashboard, ClipboardCheck, Factory, Cog, ListChecks, Settings } from "lucide-react";
+import { LayoutDashboard, ClipboardCheck, ListChecks, Settings } from "lucide-react";
 import type { ReactNode } from "react";
 
 const nav = [
   { to: "/", label: "Dashboard", icon: LayoutDashboard },
   { to: "/audits", label: "Audits", icon: ClipboardCheck },
-  { to: "/workshops", label: "Ateliers", icon: Factory },
-  { to: "/machines", label: "Machines", icon: Cog },
   { to: "/actions", label: "Plans d'actions", icon: ListChecks },
   { to: "/settings", label: "Paramètres", icon: Settings },
 ] as const;
