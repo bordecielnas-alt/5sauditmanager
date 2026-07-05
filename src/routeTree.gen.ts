@@ -9,27 +9,17 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
-import { Route as WorkshopsRouteImport } from './routes/workshops'
 import { Route as SettingsRouteImport } from './routes/settings'
-import { Route as MachinesRouteImport } from './routes/machines'
 import { Route as ActionsRouteImport } from './routes/actions'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as AuditsIndexRouteImport } from './routes/audits.index'
 import { Route as AuditsIdRouteImport } from './routes/audits.$id'
+import { Route as ApiUploadsRouteImport } from './routes/api/uploads'
+import { Route as ApiUploadsFilenameRouteImport } from './routes/api/uploads.$filename'
 
-const WorkshopsRoute = WorkshopsRouteImport.update({
-  id: '/workshops',
-  path: '/workshops',
-  getParentRoute: () => rootRouteImport,
-} as any)
 const SettingsRoute = SettingsRouteImport.update({
   id: '/settings',
   path: '/settings',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const MachinesRoute = MachinesRouteImport.update({
-  id: '/machines',
-  path: '/machines',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ActionsRoute = ActionsRouteImport.update({
@@ -52,96 +42,91 @@ const AuditsIdRoute = AuditsIdRouteImport.update({
   path: '/audits/$id',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiUploadsRoute = ApiUploadsRouteImport.update({
+  id: '/api/uploads',
+  path: '/api/uploads',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiUploadsFilenameRoute = ApiUploadsFilenameRouteImport.update({
+  id: '/$filename',
+  path: '/$filename',
+  getParentRoute: () => ApiUploadsRoute,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/actions': typeof ActionsRoute
-  '/machines': typeof MachinesRoute
   '/settings': typeof SettingsRoute
-  '/workshops': typeof WorkshopsRoute
+  '/api/uploads': typeof ApiUploadsRouteWithChildren
   '/audits/$id': typeof AuditsIdRoute
   '/audits/': typeof AuditsIndexRoute
+  '/api/uploads/$filename': typeof ApiUploadsFilenameRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/actions': typeof ActionsRoute
-  '/machines': typeof MachinesRoute
   '/settings': typeof SettingsRoute
-  '/workshops': typeof WorkshopsRoute
+  '/api/uploads': typeof ApiUploadsRouteWithChildren
   '/audits/$id': typeof AuditsIdRoute
   '/audits': typeof AuditsIndexRoute
+  '/api/uploads/$filename': typeof ApiUploadsFilenameRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/actions': typeof ActionsRoute
-  '/machines': typeof MachinesRoute
   '/settings': typeof SettingsRoute
-  '/workshops': typeof WorkshopsRoute
+  '/api/uploads': typeof ApiUploadsRouteWithChildren
   '/audits/$id': typeof AuditsIdRoute
   '/audits/': typeof AuditsIndexRoute
+  '/api/uploads/$filename': typeof ApiUploadsFilenameRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
     | '/actions'
-    | '/machines'
     | '/settings'
-    | '/workshops'
+    | '/api/uploads'
     | '/audits/$id'
     | '/audits/'
+    | '/api/uploads/$filename'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
     | '/actions'
-    | '/machines'
     | '/settings'
-    | '/workshops'
+    | '/api/uploads'
     | '/audits/$id'
     | '/audits'
+    | '/api/uploads/$filename'
   id:
     | '__root__'
     | '/'
     | '/actions'
-    | '/machines'
     | '/settings'
-    | '/workshops'
+    | '/api/uploads'
     | '/audits/$id'
     | '/audits/'
+    | '/api/uploads/$filename'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   ActionsRoute: typeof ActionsRoute
-  MachinesRoute: typeof MachinesRoute
   SettingsRoute: typeof SettingsRoute
-  WorkshopsRoute: typeof WorkshopsRoute
+  ApiUploadsRoute: typeof ApiUploadsRouteWithChildren
   AuditsIdRoute: typeof AuditsIdRoute
   AuditsIndexRoute: typeof AuditsIndexRoute
 }
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
-    '/workshops': {
-      id: '/workshops'
-      path: '/workshops'
-      fullPath: '/workshops'
-      preLoaderRoute: typeof WorkshopsRouteImport
-      parentRoute: typeof rootRouteImport
-    }
     '/settings': {
       id: '/settings'
       path: '/settings'
       fullPath: '/settings'
       preLoaderRoute: typeof SettingsRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/machines': {
-      id: '/machines'
-      path: '/machines'
-      fullPath: '/machines'
-      preLoaderRoute: typeof MachinesRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/actions': {
@@ -172,28 +157,43 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuditsIdRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/uploads': {
+      id: '/api/uploads'
+      path: '/api/uploads'
+      fullPath: '/api/uploads'
+      preLoaderRoute: typeof ApiUploadsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/uploads/$filename': {
+      id: '/api/uploads/$filename'
+      path: '/$filename'
+      fullPath: '/api/uploads/$filename'
+      preLoaderRoute: typeof ApiUploadsFilenameRouteImport
+      parentRoute: typeof ApiUploadsRoute
+    }
   }
 }
+
+interface ApiUploadsRouteChildren {
+  ApiUploadsFilenameRoute: typeof ApiUploadsFilenameRoute
+}
+
+const ApiUploadsRouteChildren: ApiUploadsRouteChildren = {
+  ApiUploadsFilenameRoute: ApiUploadsFilenameRoute,
+}
+
+const ApiUploadsRouteWithChildren = ApiUploadsRoute._addFileChildren(
+  ApiUploadsRouteChildren,
+)
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   ActionsRoute: ActionsRoute,
-  MachinesRoute: MachinesRoute,
   SettingsRoute: SettingsRoute,
-  WorkshopsRoute: WorkshopsRoute,
+  ApiUploadsRoute: ApiUploadsRouteWithChildren,
   AuditsIdRoute: AuditsIdRoute,
   AuditsIndexRoute: AuditsIndexRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
   ._addFileTypes<FileRouteTypes>()
-
-import type { getRouter } from './router.tsx'
-import type { startInstance } from './start.ts'
-declare module '@tanstack/react-start' {
-  interface Register {
-    ssr: true
-    router: Awaited<ReturnType<typeof getRouter>>
-    config: Awaited<ReturnType<typeof startInstance.getOptions>>
-  }
-}
