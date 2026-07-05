@@ -3,6 +3,7 @@ node_modules
 .gitignore
 dist
 .data
+data
 .lovable
 .env
 .env.*
