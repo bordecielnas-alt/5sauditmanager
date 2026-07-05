@@ -11,12 +11,12 @@ RUN apt-get update \
 RUN npm install -g bun@1.3.3
 
 COPY package.json bun.lock* ./
-RUN bun install --frozen-lockfile
+# Skip lifecycle scripts during install; bunx-invoked node-gyp@latest is incompatible with node 20.
+# We compile better-sqlite3 explicitly with npm's bundled node-gyp right after.
+RUN bun install --frozen-lockfile --ignore-scripts
+RUN npm rebuild better-sqlite3 --build-from-source
 COPY . .
 RUN bun run build
-
-# Rebuild better-sqlite3 for node runtime (compile native binding against node headers)
-RUN cd node_modules/better-sqlite3 && npm rebuild better-sqlite3 --build-from-source || true
 
 # ---------- runtime stage ----------
 FROM node:20-bookworm-slim AS runtime
