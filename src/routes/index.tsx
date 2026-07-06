@@ -78,7 +78,7 @@ function DashboardPage() {
   const radar = (d?.criteria ?? []).map((c) => {
     const rs = filteredResponses.filter((r) => r.criteria_id === c.id && r.score != null);
     const avg = rs.length ? rs.reduce((s, r) => s + (r.score ?? 0), 0) / rs.length : 0;
-    return { criteria: c.name.split(" - ")[0], score: Number(avg.toFixed(2)), fullMark: 5 };
+    return { criteria: c.name, score: Number(avg.toFixed(2)), fullMark: 5 };
   });
 
   const bySite = (d?.sites ?? [])
@@ -91,9 +91,37 @@ function DashboardPage() {
     .filter((r) => r.count > 0)
     .sort((a, b) => b.score - a.score);
 
-  const timeline = [...completed]
-    .sort((a, b) => a.audit_date.localeCompare(b.audit_date))
-    .map((a) => ({ date: format(parseISO(a.audit_date), "dd/MM"), score: Number(a.global_score ?? 0) }));
+  // Timeline grouping (day / week / month / quarter)
+  const [xAxis, setXAxis] = useState<"day" | "week" | "month" | "quarter">("month");
+  const timeline = useMemo(() => {
+    const bucketKey = (iso: string) => {
+      const dt = parseISO(iso);
+      if (xAxis === "day") return format(dt, "yyyy-MM-dd");
+      if (xAxis === "week") return format(startOfWeek(dt, { weekStartsOn: 1 }), "yyyy-'S'II");
+      if (xAxis === "month") return format(startOfMonth(dt), "yyyy-MM");
+      return `${format(startOfQuarter(dt), "yyyy")}-T${getQuarter(dt)}`;
+    };
+    const bucketLabel = (iso: string) => {
+      const dt = parseISO(iso);
+      if (xAxis === "day") return format(dt, "dd/MM");
+      if (xAxis === "week") return `S${format(dt, "II")} ${format(dt, "yy")}`;
+      if (xAxis === "month") return format(dt, "MM/yy");
+      return `T${getQuarter(dt)} ${format(dt, "yy")}`;
+    };
+    const byBucket = new Map<string, { label: string; sum: number; n: number }>();
+    [...completed]
+      .sort((a, b) => a.audit_date.localeCompare(b.audit_date))
+      .forEach((a) => {
+        const k = bucketKey(a.audit_date);
+        const e = byBucket.get(k) ?? { label: bucketLabel(a.audit_date), sum: 0, n: 0 };
+        e.sum += Number(a.global_score ?? 0);
+        e.n += 1;
+        byBucket.set(k, e);
+      });
+    return [...byBucket.entries()]
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([, v]) => ({ date: v.label, score: Number((v.sum / v.n).toFixed(2)) }));
+  }, [completed, xAxis]);
 
   const toggle = <T,>(set: Set<T>, setSet: (s: Set<T>) => void, id: T) => {
     const n = new Set(set);
