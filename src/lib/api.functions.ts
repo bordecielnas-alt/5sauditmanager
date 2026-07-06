@@ -515,13 +515,17 @@ export const dashboardData = createServerFn({ method: "GET" }).handler(async () 
     }>;
   const photos = dbi
     .prepare(
-      `SELECT p.id, p.response_id, p.file_path, p.comment, r.audit_id
+      `SELECT p.id, p.response_id, p.file_path, p.comment, p.created_at,
+              r.audit_id, a.audit_date, a.auditor, a.gap_id
        FROM audit_response_photos p
        JOIN audit_responses r ON r.id = p.response_id
-       ORDER BY p.created_at DESC`,
+       LEFT JOIN audits a ON a.id = r.audit_id
+       ORDER BY p.created_at ASC`,
     )
     .all() as Array<{
-      id: string; response_id: string; file_path: string; comment: string | null; audit_id: string;
+      id: string; response_id: string; file_path: string; comment: string | null;
+      created_at: number; audit_id: string; audit_date: string | null; auditor: string | null;
+      gap_id: string | null;
     }>;
   const sites = dbi.prepare("SELECT * FROM sites ORDER BY name").all() as { id: string; name: string }[];
   const uaps = dbi.prepare("SELECT * FROM uaps ORDER BY name").all() as {
