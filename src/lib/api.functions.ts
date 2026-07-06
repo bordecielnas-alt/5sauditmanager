@@ -361,36 +361,40 @@ export const completeAudit = createServerFn({ method: "POST" })
   .inputValidator((d: { id: string }) => d)
   .handler(async ({ data }) => {
     const dbi = await db();
+    const audit = dbi.prepare("SELECT * FROM audits WHERE id = ?").get(data.id) as Audit | undefined;
+    if (!audit) return { global: null };
     const responses = dbi
-      .prepare("SELECT criteria_id, score FROM audit_responses WHERE audit_id = ? AND score IS NOT NULL")
-      .all(data.id) as { criteria_id: string; score: number }[];
+      .prepare("SELECT id, criteria_id, score, suggested_action FROM audit_responses WHERE audit_id = ?")
+      .all(data.id) as { id: string; criteria_id: string; score: number | null; suggested_action: string | null }[];
+    const scored = responses.filter((r) => r.score != null) as { criteria_id: string; score: number }[];
     const byC: Record<string, { sum: number; n: number }> = {};
-    responses.forEach((r) => {
+    scored.forEach((r) => {
       byC[r.criteria_id] ??= { sum: 0, n: 0 };
       byC[r.criteria_id].sum += r.score;
       byC[r.criteria_id].n += 1;
     });
-    const avgs = Object.entries(byC).map(([cid, { sum, n }]) => ({ cid, avg: sum / n }));
-    const global = avgs.length ? avgs.reduce((s, x) => s + x.avg, 0) / avgs.length : null;
+    const avgs = Object.values(byC);
+    const global = avgs.length ? avgs.reduce((s, x) => s + x.sum / x.n, 0) / avgs.length : null;
     dbi
       .prepare("UPDATE audits SET status = 'completed', global_score = ? WHERE id = ?")
       .run(global, data.id);
 
+    // Turn each response's `suggested_action` (if non-empty) into a corrective action.
+    // Dedupe by response_id so re-closing an audit does not duplicate rows.
     const existing = dbi
-      .prepare("SELECT criteria_id FROM corrective_actions WHERE audit_id = ?")
-      .all(data.id) as { criteria_id: string }[];
-    const existingSet = new Set(existing.map((e) => e.criteria_id));
-
-    const criteria = dbi.prepare("SELECT id, name FROM criteria").all() as { id: string; name: string }[];
-    const critName = new Map(criteria.map((c) => [c.id, c.name]));
-
+      .prepare("SELECT response_id FROM corrective_actions WHERE audit_id = ? AND response_id IS NOT NULL")
+      .all(data.id) as { response_id: string }[];
+    const existingSet = new Set(existing.map((e) => e.response_id));
     const ins = dbi.prepare(
-      "INSERT INTO corrective_actions (id, audit_id, criteria_id, description, status) VALUES (?, ?, ?, ?, 'todo')",
+      `INSERT INTO corrective_actions
+         (id, audit_id, response_id, criteria_id, site_id, uap_id, gap_id, description, status)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'todo')`,
     );
-    for (const { cid, avg } of avgs) {
-      if (avg >= 3 || existingSet.has(cid)) continue;
+    for (const r of responses) {
+      const desc = (r.suggested_action ?? "").trim();
+      if (!desc || existingSet.has(r.id)) continue;
       const id = await uid();
-      ins.run(id, data.id, cid, `Améliorer le critère ${critName.get(cid) ?? cid} (note ${avg.toFixed(2)}/5)`);
+      ins.run(id, data.id, r.id, r.criteria_id, audit.site_id, audit.uap_id, audit.gap_id, desc);
     }
     return { global };
   });
@@ -399,28 +403,82 @@ export const completeAudit = createServerFn({ method: "POST" })
 
 export const listActions = createServerFn({ method: "GET" }).handler(async () => {
   return (await db())
-    .prepare("SELECT * FROM corrective_actions ORDER BY created_at DESC")
+    .prepare(
+      `SELECT ca.*,
+              COALESCE(ca.site_id, a.site_id) AS site_id,
+              COALESCE(ca.uap_id, a.uap_id)   AS uap_id,
+              COALESCE(ca.gap_id, a.gap_id)   AS gap_id
+       FROM corrective_actions ca
+       LEFT JOIN audits a ON a.id = ca.audit_id
+       ORDER BY ca.created_at DESC`,
+    )
     .all() as Array<{
       id: string; audit_id: string | null; criteria_id: string | null;
+      site_id: string | null; uap_id: string | null; gap_id: string | null;
       description: string; responsible: string | null; due_date: string | null;
       status: string; completed_at: number | null;
     }>;
 });
 
+export const createAction = createServerFn({ method: "POST" })
+  .inputValidator(
+    (d: {
+      description: string;
+      site_id?: string | null;
+      uap_id?: string | null;
+      gap_id?: string | null;
+      responsible?: string | null;
+      due_date?: string | null;
+    }) => d,
+  )
+  .handler(async ({ data }) => {
+    const id = await uid();
+    (await db())
+      .prepare(
+        `INSERT INTO corrective_actions
+           (id, description, site_id, uap_id, gap_id, responsible, due_date, status)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 'todo')`,
+      )
+      .run(
+        id,
+        data.description.trim(),
+        data.site_id ?? null,
+        data.uap_id ?? null,
+        data.gap_id ?? null,
+        data.responsible ?? null,
+        data.due_date ?? null,
+      );
+    return { id };
+  });
+
 export const updateAction = createServerFn({ method: "POST" })
   .inputValidator(
-    (d: { id: string; responsible?: string | null; due_date?: string | null; status?: string }) => d,
+    (d: {
+      id: string;
+      description?: string;
+      responsible?: string | null;
+      due_date?: string | null;
+      status?: string;
+      site_id?: string | null;
+      uap_id?: string | null;
+      gap_id?: string | null;
+    }) => d,
   )
   .handler(async ({ data }) => {
     const dbi = await db();
     const sets: string[] = [];
     const vals: unknown[] = [];
+    if ("description" in data) { sets.push("description = ?"); vals.push(data.description); }
     if ("responsible" in data) { sets.push("responsible = ?"); vals.push(data.responsible ?? null); }
     if ("due_date" in data) { sets.push("due_date = ?"); vals.push(data.due_date ?? null); }
+    if ("site_id" in data) { sets.push("site_id = ?"); vals.push(data.site_id ?? null); }
+    if ("uap_id" in data) { sets.push("uap_id = ?"); vals.push(data.uap_id ?? null); }
+    if ("gap_id" in data) { sets.push("gap_id = ?"); vals.push(data.gap_id ?? null); }
     if ("status" in data) {
       sets.push("status = ?");
       vals.push(data.status);
       if (data.status === "done") { sets.push("completed_at = ?"); vals.push(Date.now()); }
+      else { sets.push("completed_at = ?"); vals.push(null); }
     }
     if (sets.length) {
       vals.push(data.id);
@@ -457,13 +515,17 @@ export const dashboardData = createServerFn({ method: "GET" }).handler(async () 
     }>;
   const photos = dbi
     .prepare(
-      `SELECT p.id, p.response_id, p.file_path, p.comment, r.audit_id
+      `SELECT p.id, p.response_id, p.file_path, p.comment, p.created_at,
+              r.audit_id, a.audit_date, a.auditor, a.gap_id
        FROM audit_response_photos p
        JOIN audit_responses r ON r.id = p.response_id
-       ORDER BY p.created_at DESC`,
+       LEFT JOIN audits a ON a.id = r.audit_id
+       ORDER BY p.created_at ASC`,
     )
     .all() as Array<{
-      id: string; response_id: string; file_path: string; comment: string | null; audit_id: string;
+      id: string; response_id: string; file_path: string; comment: string | null;
+      created_at: number; audit_id: string; audit_date: string | null; auditor: string | null;
+      gap_id: string | null;
     }>;
   const sites = dbi.prepare("SELECT * FROM sites ORDER BY name").all() as { id: string; name: string }[];
   const uaps = dbi.prepare("SELECT * FROM uaps ORDER BY name").all() as {

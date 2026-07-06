@@ -20,6 +20,7 @@ export function PhotoUploader({
   criteriaId,
   responseId,
   photos,
+  defaultComment,
   onChanged,
 }: {
   auditId: string;
@@ -27,6 +28,7 @@ export function PhotoUploader({
   criteriaId: string;
   responseId: string | undefined;
   photos: PhotoItem[];
+  defaultComment?: string;
   onChanged: () => void;
 }) {
   const qc = useQueryClient();
@@ -52,7 +54,7 @@ export function PhotoUploader({
         const res = await fetch("/api/uploads", { method: "POST", body: fd });
         if (!res.ok) throw new Error("upload failed");
         const { filename } = await res.json();
-        await addPhotoFn({ data: { response_id: rid, file_path: filename } });
+        await addPhotoFn({ data: { response_id: rid, file_path: filename, comment: defaultComment } });
       }
       toast.success(`${files.length} photo(s) ajoutée(s)`);
       onChanged();

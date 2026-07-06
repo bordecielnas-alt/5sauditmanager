@@ -13,7 +13,7 @@ import {
   Bar, BarChart, CartesianGrid, Line, LineChart, PolarAngleAxis, PolarGrid,
   Radar, RadarChart, ResponsiveContainer, Tooltip, XAxis, YAxis, PolarRadiusAxis,
 } from "recharts";
-import { format, parseISO, subDays, subMonths, subYears, isAfter } from "date-fns";
+import { format, parseISO, subDays, subMonths, subYears, isAfter, startOfWeek, startOfMonth, startOfQuarter, getQuarter } from "date-fns";
 import { useMemo, useState, useEffect } from "react";
 
 export const Route = createFileRoute("/")({ component: DashboardPage });
@@ -78,7 +78,7 @@ function DashboardPage() {
   const radar = (d?.criteria ?? []).map((c) => {
     const rs = filteredResponses.filter((r) => r.criteria_id === c.id && r.score != null);
     const avg = rs.length ? rs.reduce((s, r) => s + (r.score ?? 0), 0) / rs.length : 0;
-    return { criteria: c.name.split(" - ")[0], score: Number(avg.toFixed(2)), fullMark: 5 };
+    return { criteria: c.name, score: Number(avg.toFixed(2)), fullMark: 5 };
   });
 
   const bySite = (d?.sites ?? [])
@@ -91,9 +91,37 @@ function DashboardPage() {
     .filter((r) => r.count > 0)
     .sort((a, b) => b.score - a.score);
 
-  const timeline = [...completed]
-    .sort((a, b) => a.audit_date.localeCompare(b.audit_date))
-    .map((a) => ({ date: format(parseISO(a.audit_date), "dd/MM"), score: Number(a.global_score ?? 0) }));
+  // Timeline grouping (day / week / month / quarter)
+  const [xAxis, setXAxis] = useState<"day" | "week" | "month" | "quarter">("month");
+  const timeline = useMemo(() => {
+    const bucketKey = (iso: string) => {
+      const dt = parseISO(iso);
+      if (xAxis === "day") return format(dt, "yyyy-MM-dd");
+      if (xAxis === "week") return format(startOfWeek(dt, { weekStartsOn: 1 }), "yyyy-'S'II");
+      if (xAxis === "month") return format(startOfMonth(dt), "yyyy-MM");
+      return `${format(startOfQuarter(dt), "yyyy")}-T${getQuarter(dt)}`;
+    };
+    const bucketLabel = (iso: string) => {
+      const dt = parseISO(iso);
+      if (xAxis === "day") return format(dt, "dd/MM");
+      if (xAxis === "week") return `S${format(dt, "II")} ${format(dt, "yy")}`;
+      if (xAxis === "month") return format(dt, "MM/yy");
+      return `T${getQuarter(dt)} ${format(dt, "yy")}`;
+    };
+    const byBucket = new Map<string, { label: string; sum: number; n: number }>();
+    [...completed]
+      .sort((a, b) => a.audit_date.localeCompare(b.audit_date))
+      .forEach((a) => {
+        const k = bucketKey(a.audit_date);
+        const e = byBucket.get(k) ?? { label: bucketLabel(a.audit_date), sum: 0, n: 0 };
+        e.sum += Number(a.global_score ?? 0);
+        e.n += 1;
+        byBucket.set(k, e);
+      });
+    return [...byBucket.entries()]
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([, v]) => ({ date: v.label, score: Number((v.sum / v.n).toFixed(2)) }));
+  }, [completed, xAxis]);
 
   const toggle = <T,>(set: Set<T>, setSet: (s: Set<T>) => void, id: T) => {
     const n = new Set(set);
@@ -157,8 +185,12 @@ function DashboardPage() {
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
           <Kpi label="Note globale moyenne" value={`${pct(avgGlobal)}%`} sub={`${avgGlobal.toFixed(2)}/5`} tone={pct(avgGlobal)} />
           <Kpi label="Audits (filtre)" value={String(completed.length)} sub={`${filteredAudits.length} au total`} />
-          <Kpi label="Actions ouvertes" value={String(openActions)} sub={`${overdueActions} en retard`} tone={overdueActions > 0 ? 0 : 100} />
-          <Kpi label="Actions clôturées" value={String(doneActions)} tone={100} />
+          <Link to="/actions" className="block">
+            <Kpi label="Actions ouvertes" value={String(openActions)} sub={`${overdueActions} en retard`} tone={overdueActions > 0 ? 0 : 100} />
+          </Link>
+          <Link to="/actions" className="block">
+            <Kpi label="Actions clôturées" value={String(doneActions)} tone={100} />
+          </Link>
         </div>
 
         <div className="grid gap-4 lg:grid-cols-2">
@@ -168,7 +200,7 @@ function DashboardPage() {
               <ResponsiveContainer width="100%" height="100%">
                 <RadarChart data={radar}>
                   <PolarGrid />
-                  <PolarAngleAxis dataKey="criteria" />
+                  <PolarAngleAxis dataKey="criteria" tick={{ fontSize: 11 }} />
                   <PolarRadiusAxis domain={[0, 5]} />
                   <Radar dataKey="score" stroke="var(--color-chart-1)" fill="var(--color-chart-1)" fillOpacity={0.4} />
                   <Tooltip />
@@ -178,7 +210,16 @@ function DashboardPage() {
           </Card>
 
           <Card>
-            <CardHeader><CardTitle>Évolution des scores</CardTitle></CardHeader>
+            <CardHeader className="flex flex-row items-center justify-between">
+              <CardTitle>Évolution des scores</CardTitle>
+              <div className="flex gap-1">
+                {(["day", "week", "month", "quarter"] as const).map((v) => (
+                  <Button key={v} size="sm" variant={xAxis === v ? "default" : "outline"} onClick={() => setXAxis(v)} className="h-7 text-xs">
+                    {v === "day" ? "Jour" : v === "week" ? "Semaine" : v === "month" ? "Mois" : "Trimestre"}
+                  </Button>
+                ))}
+              </div>
+            </CardHeader>
             <CardContent className="h-72">
               <ResponsiveContainer width="100%" height="100%">
                 <LineChart data={timeline}>
@@ -214,21 +255,29 @@ function DashboardPage() {
                 <p className="text-sm text-muted-foreground">Aucune photo pour ce filtre.</p>
               ) : (
                 <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3">
-                  {filteredPhotos.map((p) => (
-                    <Link
-                      key={p.id}
-                      to="/audits/$id"
-                      params={{ id: p.audit_id }}
-                      className="group relative block rounded overflow-hidden border"
-                    >
-                      <img src={`/api/uploads/${p.file_path}`} alt="" className="w-full aspect-square object-cover" />
-                      {p.comment && (
-                        <div className="absolute inset-x-0 bottom-0 bg-black/70 text-white text-xs p-1 truncate opacity-0 group-hover:opacity-100 transition">
-                          {p.comment}
+                  {filteredPhotos.map((p) => {
+                    const gapName = d?.gaps.find((g) => g.id === p.gap_id)?.name ?? "—";
+                    const stamp = `${gapName} · ${p.audit_date ? format(parseISO(p.audit_date), "dd/MM/yyyy") : "—"} · ${p.auditor ?? "—"}`;
+                    return (
+                      <Link
+                        key={p.id}
+                        to="/audits/$id"
+                        params={{ id: p.audit_id }}
+                        className="group relative block rounded overflow-hidden border"
+                        title={stamp}
+                      >
+                        <img src={`/api/uploads/${p.file_path}`} alt="" className="w-full aspect-square object-cover" />
+                        <div className="absolute inset-x-0 top-0 bg-black/60 text-white text-[10px] px-1.5 py-0.5 truncate">
+                          {stamp}
                         </div>
-                      )}
-                    </Link>
-                  ))}
+                        {p.comment && (
+                          <div className="absolute inset-x-0 bottom-0 bg-black/70 text-white text-xs p-1 truncate opacity-0 group-hover:opacity-100 transition">
+                            {p.comment}
+                          </div>
+                        )}
+                      </Link>
+                    );
+                  })}
                 </div>
               )}
             </CardContent>

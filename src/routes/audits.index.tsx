@@ -13,12 +13,14 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, Dialog
 import { listAudits, listHierarchy, createAudit, deleteAudit } from "@/lib/api.functions";
 import { pct, scoreBg } from "@/lib/scoring";
 import { format, parseISO } from "date-fns";
-import { Plus, Trash2, FileDown } from "lucide-react";
+import { Plus, Trash2, FileDown, ArrowUpDown, Pencil } from "lucide-react";
 import { toast } from "sonner";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import * as XLSX from "xlsx";
 
 export const Route = createFileRoute("/audits/")({ component: AuditsList });
+
+type SortKey = "date" | "site" | "uap" | "gap" | "status";
 
 function AuditsList() {
   const nav = useNavigate();
@@ -31,26 +33,59 @@ function AuditsList() {
   const { data: audits } = useQuery({ queryKey: ["audits-list"], queryFn: () => listAuditsFn() });
   const { data: hier } = useQuery({ queryKey: ["hierarchy"], queryFn: () => listHierarchyFn() });
 
+  const [sortKey, setSortKey] = useState<SortKey>("date");
+  const [sortAsc, setSortAsc] = useState(false);
+
   const del = useMutation({
     mutationFn: async (id: string) => delFn({ data: { id } }),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ["audits-list"] }); toast.success("Audit supprimé"); },
   });
 
-  const exportExcel = () => {
-    if (!audits || !hier) return;
+  const rows = useMemo(() => {
+    if (!audits || !hier) return [];
     const site = (id: string | null) => hier.sites.find((s) => s.id === id)?.name ?? "";
     const uap = (id: string | null) => hier.uaps.find((u) => u.id === id)?.name ?? "";
     const gap = (id: string | null) => hier.gaps.find((g) => g.id === id)?.name ?? "";
-    const rows = audits.map((a) => ({
-      Date: a.audit_date, Site: site(a.site_id), UAP: uap(a.uap_id), Gap: gap(a.gap_id),
+    const enr = audits.map((a) => ({ ...a, siteName: site(a.site_id), uapName: uap(a.uap_id), gapName: gap(a.gap_id) }));
+    const cmp = (a: string, b: string) => a.localeCompare(b);
+    const key = sortKey;
+    enr.sort((a, b) => {
+      let r = 0;
+      if (key === "date") r = a.audit_date.localeCompare(b.audit_date);
+      else if (key === "site") r = cmp(a.siteName, b.siteName);
+      else if (key === "uap") r = cmp(a.uapName, b.uapName);
+      else if (key === "gap") r = cmp(a.gapName, b.gapName);
+      else if (key === "status") r = cmp(a.status, b.status);
+      return sortAsc ? r : -r;
+    });
+    return enr;
+  }, [audits, hier, sortKey, sortAsc]);
+
+  const toggleSort = (k: SortKey) => {
+    if (sortKey === k) setSortAsc((v) => !v);
+    else { setSortKey(k); setSortAsc(true); }
+  };
+
+  const exportExcel = () => {
+    const dat = rows.map((a) => ({
+      Date: a.audit_date, Site: a.siteName, UAP: a.uapName, Gap: a.gapName,
       Auditeur: a.auditor, "Note /5": a.global_score,
       "Conformité %": a.global_score ? pct(Number(a.global_score)) : "", Statut: a.status,
     }));
-    const ws = XLSX.utils.json_to_sheet(rows);
+    const ws = XLSX.utils.json_to_sheet(dat);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Audits");
     XLSX.writeFile(wb, "audits-5s.xlsx");
   };
+
+  const Th = ({ k, children }: { k: SortKey; children: React.ReactNode }) => (
+    <th className="text-left p-3 select-none">
+      <button className="inline-flex items-center gap-1 hover:text-foreground" onClick={() => toggleSort(k)}>
+        {children}<ArrowUpDown className="h-3 w-3 opacity-50" />
+        {sortKey === k && <span className="text-[10px]">{sortAsc ? "▲" : "▼"}</span>}
+      </button>
+    </th>
+  );
 
   return (
     <AppLayout>
@@ -78,24 +113,22 @@ function AuditsList() {
               <table className="w-full text-sm">
                 <thead className="bg-muted text-muted-foreground">
                   <tr>
-                    <th className="text-left p-3">Date</th>
-                    <th className="text-left p-3">Site</th>
-                    <th className="text-left p-3">UAP</th>
-                    <th className="text-left p-3">Gap</th>
+                    <Th k="date">Date</Th>
+                    <Th k="site">Site</Th>
+                    <Th k="uap">UAP</Th>
+                    <Th k="gap">Gap</Th>
                     <th className="text-left p-3">Auditeur</th>
                     <th className="text-left p-3">Note</th>
-                    <th className="text-left p-3">Statut</th>
+                    <Th k="status">Statut</Th>
                     <th className="p-3"></th>
                   </tr>
                 </thead>
                 <tbody>
-                  {(!audits || audits.length === 0) && (
+                  {rows.length === 0 && (
                     <tr><td colSpan={8} className="p-8 text-center text-muted-foreground">Aucun audit — cliquez sur "Nouvel audit" pour commencer.</td></tr>
                   )}
-                  {audits?.map((a) => {
-                    const s = hier?.sites.find((x) => x.id === a.site_id);
-                    const u = hier?.uaps.find((x) => x.id === a.uap_id);
-                    const g = hier?.gaps.find((x) => x.id === a.gap_id);
+                  {rows.map((a) => {
+                    const isDraft = a.status !== "completed";
                     return (
                       <tr key={a.id} className="border-t hover:bg-muted/50">
                         <td className="p-3">
@@ -103,9 +136,9 @@ function AuditsList() {
                             {format(parseISO(a.audit_date), "dd/MM/yyyy")}
                           </Link>
                         </td>
-                        <td className="p-3">{s?.name ?? "—"}</td>
-                        <td className="p-3">{u?.name ?? "—"}</td>
-                        <td className="p-3">{g?.name ?? "—"}</td>
+                        <td className="p-3">{a.siteName || "—"}</td>
+                        <td className="p-3">{a.uapName || "—"}</td>
+                        <td className="p-3">{a.gapName || "—"}</td>
                         <td className="p-3">{a.auditor}</td>
                         <td className="p-3">
                           {a.global_score != null ? (
@@ -115,11 +148,16 @@ function AuditsList() {
                           ) : "—"}
                         </td>
                         <td className="p-3">
-                          <Badge variant={a.status === "completed" ? "default" : "secondary"}>
-                            {a.status === "completed" ? "Terminé" : "Brouillon"}
+                          <Badge variant={isDraft ? "secondary" : "default"}>
+                            {isDraft ? "Brouillon" : "Terminé"}
                           </Badge>
                         </td>
-                        <td className="p-3 text-right">
+                        <td className="p-3 text-right whitespace-nowrap">
+                          <Button asChild size="sm" variant="ghost">
+                            <Link to="/audits/$id" params={{ id: a.id }}>
+                              <Pencil className="h-4 w-4 mr-1" />{isDraft ? "Reprendre" : "Éditer"}
+                            </Link>
+                          </Button>
                           <Button size="sm" variant="ghost" onClick={() => { if (confirm("Supprimer cet audit ?")) del.mutate(a.id); }}>
                             <Trash2 className="h-4 w-4" />
                           </Button>
