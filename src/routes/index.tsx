@@ -185,8 +185,12 @@ function DashboardPage() {
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
           <Kpi label="Note globale moyenne" value={`${pct(avgGlobal)}%`} sub={`${avgGlobal.toFixed(2)}/5`} tone={pct(avgGlobal)} />
           <Kpi label="Audits (filtre)" value={String(completed.length)} sub={`${filteredAudits.length} au total`} />
-          <Kpi label="Actions ouvertes" value={String(openActions)} sub={`${overdueActions} en retard`} tone={overdueActions > 0 ? 0 : 100} />
-          <Kpi label="Actions clôturées" value={String(doneActions)} tone={100} />
+          <Link to="/actions" className="block">
+            <Kpi label="Actions ouvertes" value={String(openActions)} sub={`${overdueActions} en retard`} tone={overdueActions > 0 ? 0 : 100} />
+          </Link>
+          <Link to="/actions" className="block">
+            <Kpi label="Actions clôturées" value={String(doneActions)} tone={100} />
+          </Link>
         </div>
 
         <div className="grid gap-4 lg:grid-cols-2">
@@ -196,7 +200,7 @@ function DashboardPage() {
               <ResponsiveContainer width="100%" height="100%">
                 <RadarChart data={radar}>
                   <PolarGrid />
-                  <PolarAngleAxis dataKey="criteria" />
+                  <PolarAngleAxis dataKey="criteria" tick={{ fontSize: 11 }} />
                   <PolarRadiusAxis domain={[0, 5]} />
                   <Radar dataKey="score" stroke="var(--color-chart-1)" fill="var(--color-chart-1)" fillOpacity={0.4} />
                   <Tooltip />
@@ -206,7 +210,16 @@ function DashboardPage() {
           </Card>
 
           <Card>
-            <CardHeader><CardTitle>Évolution des scores</CardTitle></CardHeader>
+            <CardHeader className="flex flex-row items-center justify-between">
+              <CardTitle>Évolution des scores</CardTitle>
+              <div className="flex gap-1">
+                {(["day", "week", "month", "quarter"] as const).map((v) => (
+                  <Button key={v} size="sm" variant={xAxis === v ? "default" : "outline"} onClick={() => setXAxis(v)} className="h-7 text-xs">
+                    {v === "day" ? "Jour" : v === "week" ? "Semaine" : v === "month" ? "Mois" : "Trimestre"}
+                  </Button>
+                ))}
+              </div>
+            </CardHeader>
             <CardContent className="h-72">
               <ResponsiveContainer width="100%" height="100%">
                 <LineChart data={timeline}>
@@ -242,21 +255,29 @@ function DashboardPage() {
                 <p className="text-sm text-muted-foreground">Aucune photo pour ce filtre.</p>
               ) : (
                 <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3">
-                  {filteredPhotos.map((p) => (
-                    <Link
-                      key={p.id}
-                      to="/audits/$id"
-                      params={{ id: p.audit_id }}
-                      className="group relative block rounded overflow-hidden border"
-                    >
-                      <img src={`/api/uploads/${p.file_path}`} alt="" className="w-full aspect-square object-cover" />
-                      {p.comment && (
-                        <div className="absolute inset-x-0 bottom-0 bg-black/70 text-white text-xs p-1 truncate opacity-0 group-hover:opacity-100 transition">
-                          {p.comment}
+                  {filteredPhotos.map((p) => {
+                    const gapName = d?.gaps.find((g) => g.id === p.gap_id)?.name ?? "—";
+                    const stamp = `${gapName} · ${p.audit_date ? format(parseISO(p.audit_date), "dd/MM/yyyy") : "—"} · ${p.auditor ?? "—"}`;
+                    return (
+                      <Link
+                        key={p.id}
+                        to="/audits/$id"
+                        params={{ id: p.audit_id }}
+                        className="group relative block rounded overflow-hidden border"
+                        title={stamp}
+                      >
+                        <img src={`/api/uploads/${p.file_path}`} alt="" className="w-full aspect-square object-cover" />
+                        <div className="absolute inset-x-0 top-0 bg-black/60 text-white text-[10px] px-1.5 py-0.5 truncate">
+                          {stamp}
                         </div>
-                      )}
-                    </Link>
-                  ))}
+                        {p.comment && (
+                          <div className="absolute inset-x-0 bottom-0 bg-black/70 text-white text-xs p-1 truncate opacity-0 group-hover:opacity-100 transition">
+                            {p.comment}
+                          </div>
+                        )}
+                      </Link>
+                    );
+                  })}
                 </div>
               )}
             </CardContent>
