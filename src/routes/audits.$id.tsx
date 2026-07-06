@@ -1,4 +1,4 @@
-import { createFileRoute, Link } from "@tanstack/react-router";
+import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { AppLayout } from "@/components/AppLayout";
@@ -10,6 +10,10 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { PhotoUploader, type PhotoItem } from "@/components/PhotoUploader";
 import {
   getAudit, updateAuditHeader, saveResponse, completeAudit,
@@ -17,14 +21,17 @@ import {
 } from "@/lib/api.functions";
 import { pct, scoreBg, scoreText, SCORE_THRESHOLD } from "@/lib/scoring";
 import { toast } from "sonner";
-import { ArrowLeft, Check, ChevronDown, History } from "lucide-react";
+import { ArrowLeft, Check, ChevronDown, ChevronLeft, ChevronRight, History, Save } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { format, parseISO } from "date-fns";
 
 export const Route = createFileRoute("/audits/$id")({ component: AuditEditor });
 
+type ViewMode = "complet" | "etape";
+
 function AuditEditor() {
   const { id } = Route.useParams();
+  const nav = useNavigate();
   const qc = useQueryClient();
 
   const getAuditFn = useServerFn(getAudit);
@@ -41,6 +48,11 @@ function AuditEditor() {
   const { data: prev } = useQuery({ queryKey: ["prev-audit", id], queryFn: () => prevCtxFn({ data: { audit_id: id } }) });
 
   const [form, setForm] = useState({ audit_date: "", site_id: "", uap_id: "", gap_id: "", auditor: "" });
+  const [dirty, setDirty] = useState(false);
+  const [viewMode, setViewMode] = useState<ViewMode>("complet");
+  const [stepIdx, setStepIdx] = useState(0);
+  const [confirmClose, setConfirmClose] = useState(false);
+
   useEffect(() => {
     if (current?.audit) setForm({
       audit_date: current.audit.audit_date,
@@ -51,12 +63,29 @@ function AuditEditor() {
     });
   }, [current?.audit]);
 
+  // Warn on unload if dirty
+  useEffect(() => {
+    if (!dirty) return;
+    const h = (e: BeforeUnloadEvent) => { e.preventDefault(); e.returnValue = ""; };
+    window.addEventListener("beforeunload", h);
+    return () => window.removeEventListener("beforeunload", h);
+  }, [dirty]);
+
   const uaps = useMemo(() => (hier?.uaps ?? []).filter((u) => u.site_id === form.site_id), [hier, form.site_id]);
   const gaps = useMemo(() => (hier?.gaps ?? []).filter((g) => g.uap_id === form.uap_id), [hier, form.uap_id]);
 
+  const gapName = hier?.gaps.find((g) => g.id === form.gap_id)?.name ?? "";
+  const photoStamp = `${gapName || "—"} / ${form.audit_date || "—"} / ${form.auditor || "—"}`;
+
   const saveHeader = useMutation({
     mutationFn: async () => updateHeaderFn({ data: { id, ...form } }),
-    onSuccess: () => { toast.success("Enregistré"); qc.invalidateQueries({ queryKey: ["audit", id] }); qc.invalidateQueries({ queryKey: ["prev-audit", id] }); },
+    onSuccess: () => {
+      toast.success("Enregistré comme brouillon");
+      setDirty(false);
+      qc.invalidateQueries({ queryKey: ["audit", id] });
+      qc.invalidateQueries({ queryKey: ["prev-audit", id] });
+      qc.invalidateQueries({ queryKey: ["audits-list"] });
+    },
   });
 
   const scoreByCriteria = useMemo(() => {
@@ -76,10 +105,15 @@ function AuditEditor() {
   }, [scoreByCriteria]);
 
   const complete = useMutation({
-    mutationFn: async () => completeFn({ data: { id } }),
+    mutationFn: async () => {
+      await updateHeaderFn({ data: { id, ...form } });
+      return completeFn({ data: { id } });
+    },
     onSuccess: () => {
-      toast.success("Audit clôturé — actions correctives générées pour les critères faibles");
-      qc.invalidateQueries({ queryKey: ["audit", id] });
+      toast.success("Audit clôturé — actions correctives ajoutées au plan");
+      setDirty(false);
+      qc.invalidateQueries();
+      nav({ to: "/audits" });
     },
   });
 
@@ -100,6 +134,43 @@ function AuditEditor() {
     photosByResponse.set(p.response_id, arr);
   });
 
+  const allQuestions = (ref?.criteria ?? []).flatMap((c) =>
+    ref!.questions.filter((q) => q.criteria_id === c.id).map((q) => ({ q, c })),
+  );
+
+  const renderQuestion = (q: { id: string; text: string }, c: { id: string; name: string }) => {
+    const r = current.responses.find((x) => x.question_id === q.id);
+    const currentPhotos = r ? (photosByResponse.get(r.id) ?? []) : [];
+    const prevR = prevResponsesByQ.get(q.id);
+    const prevPhotos = prevR ? (prevPhotosByR.get(prevR.id) ?? []) : [];
+    return (
+      <QuestionRow
+        key={q.id}
+        auditId={id}
+        criteriaId={c.id}
+        questionId={q.id}
+        questionText={q.text}
+        response={r}
+        responseId={r?.id}
+        currentPhotos={currentPhotos}
+        prevScore={prevR?.score ?? null}
+        prevComment={prevR?.comment ?? null}
+        prevPhotos={prevPhotos}
+        prevDate={prev?.audit?.audit_date ?? null}
+        photoStamp={photoStamp}
+        onSave={(patch) => {
+          setDirty(true);
+          return saveRespFn({ data: { audit_id: id, question_id: q.id, criteria_id: c.id, ...patch } })
+            .then(() => qc.invalidateQueries({ queryKey: ["audit", id] }));
+        }}
+        onPhotoChange={() => { setDirty(true); qc.invalidateQueries({ queryKey: ["audit", id] }); }}
+      />
+    );
+  };
+
+  const stepMax = allQuestions.length;
+  const clampedStep = Math.min(stepIdx, Math.max(0, stepMax - 1));
+
   return (
     <AppLayout>
       <div className="p-4 md:p-8 max-w-6xl mx-auto">
@@ -108,11 +179,27 @@ function AuditEditor() {
         </Link>
         <PageHeader
           title="Audit 5S"
-          description={globalScore != null ? `Note globale : ${globalScore.toFixed(2)}/5 (${pct(globalScore)}%)` : "En cours de saisie"}
+          description={
+            <span className="flex items-center gap-3">
+              {globalScore != null ? `Note : ${globalScore.toFixed(2)}/5 (${pct(globalScore)}%)` : "En cours de saisie"}
+              {dirty && <span className="text-xs text-warning font-semibold">● Travail non sauvegardé</span>}
+            </span>
+          }
           actions={
             <>
-              <Button variant="outline" onClick={() => saveHeader.mutate()}>Enregistrer</Button>
-              <Button onClick={() => complete.mutate()}><Check className="h-4 w-4 mr-2" />Clôturer l'audit</Button>
+              <Select value={viewMode} onValueChange={(v) => setViewMode(v as ViewMode)}>
+                <SelectTrigger className="w-40"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="complet">Affichage complet</SelectItem>
+                  <SelectItem value="etape">Affichage étape</SelectItem>
+                </SelectContent>
+              </Select>
+              <Button variant="outline" onClick={() => saveHeader.mutate()}>
+                <Save className="h-4 w-4 mr-2" />Enregistrer brouillon
+              </Button>
+              <Button onClick={() => setConfirmClose(true)}>
+                <Check className="h-4 w-4 mr-2" />Clôturer l'audit
+              </Button>
             </>
           }
         />
@@ -122,11 +209,11 @@ function AuditEditor() {
           <CardContent className="grid gap-4 md:grid-cols-5">
             <div>
               <Label>Date</Label>
-              <Input type="date" value={form.audit_date} onChange={(e) => setForm({ ...form, audit_date: e.target.value })} />
+              <Input type="date" value={form.audit_date} onChange={(e) => { setForm({ ...form, audit_date: e.target.value }); setDirty(true); }} />
             </div>
             <div>
               <Label>Site</Label>
-              <Select value={form.site_id} onValueChange={(v) => setForm({ ...form, site_id: v, uap_id: "", gap_id: "" })}>
+              <Select value={form.site_id} onValueChange={(v) => { setForm({ ...form, site_id: v, uap_id: "", gap_id: "" }); setDirty(true); }}>
                 <SelectTrigger><SelectValue placeholder="Choisir…" /></SelectTrigger>
                 <SelectContent>
                   {hier?.sites.map((s) => <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>)}
@@ -135,7 +222,7 @@ function AuditEditor() {
             </div>
             <div>
               <Label>UAP</Label>
-              <Select value={form.uap_id} onValueChange={(v) => setForm({ ...form, uap_id: v, gap_id: "" })} disabled={!form.site_id}>
+              <Select value={form.uap_id} onValueChange={(v) => { setForm({ ...form, uap_id: v, gap_id: "" }); setDirty(true); }} disabled={!form.site_id}>
                 <SelectTrigger><SelectValue placeholder="Choisir…" /></SelectTrigger>
                 <SelectContent>
                   {uaps.map((u) => <SelectItem key={u.id} value={u.id}>{u.name}</SelectItem>)}
@@ -144,7 +231,7 @@ function AuditEditor() {
             </div>
             <div>
               <Label>Gap</Label>
-              <Select value={form.gap_id} onValueChange={(v) => setForm({ ...form, gap_id: v })} disabled={!form.uap_id}>
+              <Select value={form.gap_id} onValueChange={(v) => { setForm({ ...form, gap_id: v }); setDirty(true); }} disabled={!form.uap_id}>
                 <SelectTrigger><SelectValue placeholder="Choisir…" /></SelectTrigger>
                 <SelectContent>
                   {gaps.map((g) => <SelectItem key={g.id} value={g.id}>{g.name}</SelectItem>)}
@@ -153,7 +240,7 @@ function AuditEditor() {
             </div>
             <div>
               <Label>Auditeur</Label>
-              <Input value={form.auditor} onChange={(e) => setForm({ ...form, auditor: e.target.value })} />
+              <Input value={form.auditor} onChange={(e) => { setForm({ ...form, auditor: e.target.value }); setDirty(true); }} />
             </div>
             {prev?.audit && (
               <div className="md:col-span-5 text-xs text-muted-foreground flex items-center gap-2">
@@ -165,57 +252,73 @@ function AuditEditor() {
           </CardContent>
         </Card>
 
-        <div className="space-y-4">
-          {ref?.criteria.map((c) => {
-            const qs = ref.questions.filter((q) => q.criteria_id === c.id);
-            const avg = scoreByCriteria[c.id];
-            return (
-              <Card key={c.id}>
-                <CardHeader className="flex flex-row items-center justify-between">
-                  <CardTitle>{c.name}</CardTitle>
-                  {avg != null && (
-                    <span className={`px-2 py-1 rounded text-xs font-semibold ${scoreBg(avg)}`}>
-                      {avg.toFixed(2)}/5 · {pct(avg)}%
-                    </span>
-                  )}
-                </CardHeader>
-                <CardContent className="space-y-4">
-                  {qs.map((q) => {
-                    const r = current.responses.find((x) => x.question_id === q.id);
-                    const currentPhotos = r ? (photosByResponse.get(r.id) ?? []) : [];
-                    const prevR = prevResponsesByQ.get(q.id);
-                    const prevPhotos = prevR ? (prevPhotosByR.get(prevR.id) ?? []) : [];
-                    return (
-                      <QuestionRow
-                        key={q.id}
-                        auditId={id}
-                        criteriaId={c.id}
-                        questionId={q.id}
-                        questionText={q.text}
-                        response={r}
-                        responseId={r?.id}
-                        currentPhotos={currentPhotos}
-                        prevScore={prevR?.score ?? null}
-                        prevPhotos={prevPhotos}
-                        prevDate={prev?.audit?.audit_date ?? null}
-                        onSave={(patch) => saveRespFn({ data: { audit_id: id, question_id: q.id, criteria_id: c.id, ...patch } }).then(() => qc.invalidateQueries({ queryKey: ["audit", id] }))}
-                        onPhotoChange={() => qc.invalidateQueries({ queryKey: ["audit", id] })}
-                      />
-                    );
-                  })}
-                </CardContent>
-              </Card>
-            );
-          })}
-        </div>
+        {viewMode === "complet" ? (
+          <div className="space-y-4">
+            {ref?.criteria.map((c) => {
+              const qs = ref.questions.filter((q) => q.criteria_id === c.id);
+              const avg = scoreByCriteria[c.id];
+              return (
+                <Card key={c.id}>
+                  <CardHeader className="flex flex-row items-center justify-between">
+                    <CardTitle>{c.name}</CardTitle>
+                    {avg != null && (
+                      <span className={`px-2 py-1 rounded text-xs font-semibold ${scoreBg(avg)}`}>
+                        {avg.toFixed(2)}/5 · {pct(avg)}%
+                      </span>
+                    )}
+                  </CardHeader>
+                  <CardContent className="space-y-4">
+                    {qs.map((q) => renderQuestion(q, c))}
+                  </CardContent>
+                </Card>
+              );
+            })}
+          </div>
+        ) : (
+          stepMax > 0 && (
+            <Card>
+              <CardHeader className="flex flex-row items-center justify-between">
+                <CardTitle className="text-base">
+                  {allQuestions[clampedStep].c.name} — question {clampedStep + 1} / {stepMax}
+                </CardTitle>
+                <div className="flex gap-2">
+                  <Button variant="outline" size="sm" disabled={clampedStep === 0} onClick={() => setStepIdx(clampedStep - 1)}>
+                    <ChevronLeft className="h-4 w-4" />Précédent
+                  </Button>
+                  <Button variant="outline" size="sm" disabled={clampedStep >= stepMax - 1} onClick={() => setStepIdx(clampedStep + 1)}>
+                    Suivant<ChevronRight className="h-4 w-4" />
+                  </Button>
+                </div>
+              </CardHeader>
+              <CardContent>
+                {renderQuestion(allQuestions[clampedStep].q, allQuestions[clampedStep].c)}
+              </CardContent>
+            </Card>
+          )
+        )}
       </div>
+
+      <AlertDialog open={confirmClose} onOpenChange={setConfirmClose}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Clôturer cet audit ?</AlertDialogTitle>
+            <AlertDialogDescription>
+              La note globale sera figée et les actions correctives suggérées seront ajoutées au plan d'actions.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Annuler</AlertDialogCancel>
+            <AlertDialogAction onClick={() => complete.mutate()}>Confirmer</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </AppLayout>
   );
 }
 
 function QuestionRow({
   auditId, criteriaId, questionId, questionText, response, responseId,
-  currentPhotos, prevScore, prevPhotos, prevDate, onSave, onPhotoChange,
+  currentPhotos, prevScore, prevComment, prevPhotos, prevDate, photoStamp, onSave, onPhotoChange,
 }: {
   auditId: string;
   criteriaId: string;
@@ -225,14 +328,16 @@ function QuestionRow({
   responseId: string | undefined;
   currentPhotos: PhotoItem[];
   prevScore: number | null;
+  prevComment: string | null;
   prevPhotos: PhotoItem[];
   prevDate: string | null;
+  photoStamp: string;
   onSave: (patch: { score?: number; comment?: string; gap_text?: string; suggested_action?: string }) => void;
   onPhotoChange: () => void;
 }) {
   const score = response?.score ?? null;
   const [openHistory, setOpenHistory] = useState(false);
-  const hasHistory = prevScore != null || prevPhotos.length > 0;
+  const hasHistory = prevScore != null || prevPhotos.length > 0 || !!prevComment;
 
   return (
     <div className="border rounded-lg p-3">
@@ -260,7 +365,8 @@ function QuestionRow({
             {prevDate && <span className="opacity-60">· {format(parseISO(prevDate), "dd/MM/yyyy")}</span>}
             {prevPhotos.length > 0 && <span className="opacity-60">· {prevPhotos.length} photo(s)</span>}
           </CollapsibleTrigger>
-          <CollapsibleContent className="mt-2 p-2 bg-muted/40 rounded">
+          <CollapsibleContent className="mt-2 p-2 bg-muted/40 rounded space-y-2">
+            {prevComment && <div className="text-xs italic text-muted-foreground">« {prevComment} »</div>}
             {prevPhotos.length === 0 && <p className="text-xs text-muted-foreground">Pas de photo lors du dernier audit.</p>}
             <div className="flex flex-wrap gap-2">
               {prevPhotos.map((p) => (
@@ -277,7 +383,7 @@ function QuestionRow({
       <div className="grid md:grid-cols-3 gap-2 mt-2">
         <Textarea placeholder="Commentaire" defaultValue={response?.comment ?? ""} onBlur={(e) => onSave({ comment: e.target.value })} rows={2} />
         <Textarea placeholder="Écart constaté" defaultValue={response?.gap_text ?? ""} onBlur={(e) => onSave({ gap_text: e.target.value })} rows={2} />
-        <Textarea placeholder="Action corrective suggérée" defaultValue={response?.suggested_action ?? ""} onBlur={(e) => onSave({ suggested_action: e.target.value })} rows={2} />
+        <Textarea placeholder="Action corrective suggérée (deviendra une action du plan à la clôture)" defaultValue={response?.suggested_action ?? ""} onBlur={(e) => onSave({ suggested_action: e.target.value })} rows={2} />
       </div>
 
       <div className="mt-3">
@@ -287,12 +393,13 @@ function QuestionRow({
           criteriaId={criteriaId}
           responseId={responseId}
           photos={currentPhotos}
+          defaultComment={photoStamp}
           onChanged={onPhotoChange}
         />
       </div>
 
       {score != null && score < SCORE_THRESHOLD && (
-        <p className={`text-xs mt-2 ${scoreText(score)}`}>⚠ Critère faible — une action corrective sera générée à la clôture.</p>
+        <p className={`text-xs mt-2 ${scoreText(score)}`}>⚠ Critère faible — pensez à saisir une action corrective.</p>
       )}
     </div>
   );
