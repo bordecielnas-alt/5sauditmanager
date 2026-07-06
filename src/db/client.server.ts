@@ -167,6 +167,13 @@ export function getDb(): Database.Database {
   db.pragma("journal_mode = WAL");
   db.pragma("foreign_keys = ON");
   initSchema(db);
+  // Additive migrations (idempotent)
+  const cols = db.prepare("PRAGMA table_info(corrective_actions)").all() as { name: string }[];
+  const colNames = new Set(cols.map((c) => c.name));
+  if (!colNames.has("response_id")) db.exec("ALTER TABLE corrective_actions ADD COLUMN response_id TEXT");
+  if (!colNames.has("site_id")) db.exec("ALTER TABLE corrective_actions ADD COLUMN site_id TEXT");
+  if (!colNames.has("uap_id")) db.exec("ALTER TABLE corrective_actions ADD COLUMN uap_id TEXT");
+  if (!colNames.has("gap_id")) db.exec("ALTER TABLE corrective_actions ADD COLUMN gap_id TEXT");
   seed(db);
   _db = db;
   return db;
