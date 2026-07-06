@@ -130,6 +130,7 @@ function initSchema(db: Database.Database) {
       created_at INTEGER NOT NULL DEFAULT (unixepoch())
     );
     CREATE INDEX IF NOT EXISTS idx_responses_audit ON audit_responses(audit_id);
+    CREATE INDEX IF NOT EXISTS idx_actions_audit ON corrective_actions(audit_id);
     CREATE INDEX IF NOT EXISTS idx_photos_response ON audit_response_photos(response_id);
     CREATE INDEX IF NOT EXISTS idx_audits_triplet ON audits(site_id, uap_id, gap_id);
     CREATE INDEX IF NOT EXISTS idx_uaps_site ON uaps(site_id);
