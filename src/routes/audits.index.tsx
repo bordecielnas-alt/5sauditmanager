@@ -11,6 +11,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter } from "@/components/ui/dialog";
 import { listAudits, listHierarchy, createAudit, deleteAudit } from "@/lib/api.functions";
+import { HierarchyFilter, useResolvedFilters } from "@/components/HierarchyFilter";
 import { pct, scoreBg } from "@/lib/scoring";
 import { format, parseISO } from "date-fns";
 import { Plus, Trash2, FileDown, ArrowUpDown, Pencil } from "lucide-react";
