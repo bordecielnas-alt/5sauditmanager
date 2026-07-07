@@ -33,6 +33,7 @@ export function PhotoUploader({
 }) {
   const qc = useQueryClient();
   const inputRef = useRef<HTMLInputElement>(null);
+  const cameraRef = useRef<HTMLInputElement>(null);
   const [uploading, setUploading] = useState(false);
   const addPhotoFn = useServerFn(addPhoto);
   const ensureFn = useServerFn(ensureResponse);
