@@ -42,12 +42,20 @@ function AuditsList() {
     onSuccess: () => { qc.invalidateQueries({ queryKey: ["audits-list"] }); toast.success("Audit supprimé"); },
   });
 
+  const f = useResolvedFilters(hier);
+
   const rows = useMemo(() => {
     if (!audits || !hier) return [];
     const site = (id: string | null) => hier.sites.find((s) => s.id === id)?.name ?? "";
     const uap = (id: string | null) => hier.uaps.find((u) => u.id === id)?.name ?? "";
     const gap = (id: string | null) => hier.gaps.find((g) => g.id === id)?.name ?? "";
-    const enr = audits.map((a) => ({ ...a, siteName: site(a.site_id), uapName: uap(a.uap_id), gapName: gap(a.gap_id) }));
+    const filtered = audits.filter((a) => {
+      if (a.site_id && !f.sites.has(a.site_id)) return false;
+      if (a.uap_id && !f.uaps.has(a.uap_id)) return false;
+      if (a.gap_id && !f.gaps.has(a.gap_id)) return false;
+      return true;
+    });
+    const enr = filtered.map((a) => ({ ...a, siteName: site(a.site_id), uapName: uap(a.uap_id), gapName: gap(a.gap_id) }));
     const cmp = (a: string, b: string) => a.localeCompare(b);
     const key = sortKey;
     enr.sort((a, b) => {
@@ -60,7 +68,7 @@ function AuditsList() {
       return sortAsc ? r : -r;
     });
     return enr;
-  }, [audits, hier, sortKey, sortAsc]);
+  }, [audits, hier, f, sortKey, sortAsc]);
 
   const toggleSort = (k: SortKey) => {
     if (sortKey === k) setSortAsc((v) => !v);
