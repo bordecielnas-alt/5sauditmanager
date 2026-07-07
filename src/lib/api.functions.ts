@@ -210,7 +210,16 @@ export const getAudit = createServerFn({ method: "GET" })
       .all(data.id) as Array<{
         id: string; response_id: string; file_path: string; comment: string | null;
       }>;
-    return { audit, responses, photos };
+    const actions = dbi
+      .prepare(
+        `SELECT * FROM corrective_actions WHERE audit_id = ? ORDER BY created_at ASC`,
+      )
+      .all(data.id) as Array<{
+        id: string; audit_id: string; response_id: string | null; criteria_id: string | null;
+        description: string; responsible: string | null; due_date: string | null;
+        status: string;
+      }>;
+    return { audit, responses, photos, actions };
   });
 
 export const saveResponse = createServerFn({ method: "POST" })
