@@ -33,6 +33,7 @@ export function PhotoUploader({
 }) {
   const qc = useQueryClient();
   const inputRef = useRef<HTMLInputElement>(null);
+  const cameraRef = useRef<HTMLInputElement>(null);
   const [uploading, setUploading] = useState(false);
   const addPhotoFn = useServerFn(addPhoto);
   const ensureFn = useServerFn(ensureResponse);
@@ -97,18 +98,29 @@ export function PhotoUploader({
           </div>
         ))}
       </div>
-      <div>
+      <div className="flex gap-2">
         <input
           ref={inputRef}
           type="file"
           accept="image/*"
           multiple
           hidden
-          onChange={(e) => doUpload(e.target.files)}
+          onChange={(e) => { doUpload(e.target.files); e.target.value = ""; }}
         />
-        <Button type="button" size="sm" variant="outline" disabled={uploading} onClick={() => inputRef.current?.click()}>
+        <input
+          ref={cameraRef}
+          type="file"
+          accept="image/*"
+          capture="environment"
+          hidden
+          onChange={(e) => { doUpload(e.target.files); e.target.value = ""; }}
+        />
+        <Button type="button" size="sm" disabled={uploading} onClick={() => cameraRef.current?.click()}>
           <Camera className="h-4 w-4 mr-1" />
-          {uploading ? "Envoi…" : "Ajouter des photos"}
+          {uploading ? "Envoi…" : "Prendre une photo"}
+        </Button>
+        <Button type="button" size="sm" variant="outline" disabled={uploading} onClick={() => inputRef.current?.click()}>
+          Ajouter depuis la galerie
         </Button>
       </div>
     </div>
