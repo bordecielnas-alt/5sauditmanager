@@ -12,16 +12,25 @@ import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
+import { HierarchyFilter, useResolvedFilters } from "@/components/HierarchyFilter";
 import {
   listActions, listReferential, listHierarchy,
   createAction, updateAction, deleteAction,
 } from "@/lib/api.functions";
 import { Trash2, FileDown, ArrowUpDown, Plus } from "lucide-react";
 import { parseISO, isBefore } from "date-fns";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import * as XLSX from "xlsx";
 
-export const Route = createFileRoute("/actions")({ component: ActionsPage });
+type ActionSearch = { status?: "open" | "done" | "all" };
+
+export const Route = createFileRoute("/actions")({
+  component: ActionsPage,
+  validateSearch: (s: Record<string, unknown>): ActionSearch => {
+    const st = s.status;
+    return { status: st === "open" || st === "done" || st === "all" ? st : undefined };
+  },
+});
 
 const STATUSES = [
   { v: "todo", label: "À faire" },
@@ -40,13 +49,24 @@ function ActionsPage() {
   const updateFn = useServerFn(updateAction);
   const deleteFn = useServerFn(deleteAction);
 
+  const search = Route.useSearch();
   const { data: actions } = useQuery({ queryKey: ["actions-page"], queryFn: () => listFn() });
   const { data: ref } = useQuery({ queryKey: ["referential"], queryFn: () => listRefFn() });
   const { data: hier } = useQuery({ queryKey: ["hierarchy"], queryFn: () => listHierFn() });
 
+  // Apply "hide done" from URL param if provided (open → hide done, done → hide open)
   const [hideDone, setHideDone] = useState(false);
+  const [hideOpen, setHideOpen] = useState(false);
+  useEffect(() => {
+    if (search.status === "open") { setHideDone(true); setHideOpen(false); }
+    else if (search.status === "done") { setHideDone(false); setHideOpen(true); }
+    else if (search.status === "all") { setHideDone(false); setHideOpen(false); }
+  }, [search.status]);
+
   const [sortKey, setSortKey] = useState<SortKey>("due_date");
   const [sortAsc, setSortAsc] = useState(true);
+
+  const f = useResolvedFilters(hier);
 
   const update = useMutation({
     mutationFn: async (v: Parameters<typeof updateFn>[0]["data"]) => updateFn({ data: v }),
@@ -72,7 +92,14 @@ function ActionsPage() {
   }, [actions, hier, now]);
 
   const rows = useMemo(() => {
-    const filtered = hideDone ? enriched.filter((a) => a.status !== "done") : enriched;
+    const filtered = enriched.filter((a) => {
+      if (hideDone && a.status === "done") return false;
+      if (hideOpen && a.status !== "done") return false;
+      if (a.site_id && !f.sites.has(a.site_id)) return false;
+      if (a.uap_id && !f.uaps.has(a.uap_id)) return false;
+      if (a.gap_id && !f.gaps.has(a.gap_id)) return false;
+      return true;
+    });
     const cmp = (a: string, b: string) => a.localeCompare(b);
     const key = sortKey;
     const s = [...filtered].sort((a, b) => {
@@ -85,7 +112,7 @@ function ActionsPage() {
       return sortAsc ? r : -r;
     });
     return s;
-  }, [enriched, hideDone, sortKey, sortAsc]);
+  }, [enriched, hideDone, hideOpen, f, sortKey, sortAsc]);
 
   const openCount = enriched.filter((a) => a.status !== "done").length;
   const doneCount = enriched.filter((a) => a.status === "done").length;
@@ -134,7 +161,9 @@ function ActionsPage() {
           }
         />
 
-        <div className="grid grid-cols-2 md:grid-cols-3 gap-3 mb-4">
+        <HierarchyFilter hier={hier} showPeriod={false} />
+
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
           <Card><CardContent className="p-4">
             <div className="text-xs uppercase text-muted-foreground">Ouvertes</div>
             <div className="text-2xl font-bold">{openCount}</div>
@@ -147,9 +176,16 @@ function ActionsPage() {
           <Card><CardContent className="p-4 flex items-center justify-between">
             <div>
               <div className="text-xs uppercase text-muted-foreground">Affichage</div>
-              <div className="text-sm mt-1">Masquer les actions terminées</div>
+              <div className="text-sm mt-1">Masquer terminées</div>
             </div>
             <Switch checked={hideDone} onCheckedChange={setHideDone} />
+          </CardContent></Card>
+          <Card><CardContent className="p-4 flex items-center justify-between">
+            <div>
+              <div className="text-xs uppercase text-muted-foreground">Affichage</div>
+              <div className="text-sm mt-1">Masquer ouvertes</div>
+            </div>
+            <Switch checked={hideOpen} onCheckedChange={setHideOpen} />
           </CardContent></Card>
         </div>
 
