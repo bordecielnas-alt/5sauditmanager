@@ -116,6 +116,8 @@ function AuditsList() {
           }
         />
 
+        <HierarchyFilter hier={hier} showPeriod={false} />
+
         <Card>
           <CardContent className="p-0">
             <div className="overflow-x-auto">
