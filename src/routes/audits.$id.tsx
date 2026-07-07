@@ -290,8 +290,66 @@ function AuditEditor() {
                   </Button>
                 </div>
               </CardHeader>
-              <CardContent>
-                {renderQuestion(allQuestions[clampedStep].q, allQuestions[clampedStep].c)}
+              <CardContent className="space-y-4">
+                {(() => {
+                  const step = allQuestions[clampedStep];
+                  const rItem = current.responses.find((x) => x.question_id === step.q.id);
+                  const stepPhotos = rItem ? (photosByResponse.get(rItem.id) ?? []) : [];
+                  const sortedPhotos = [...stepPhotos].sort((a, b) => a.id.localeCompare(b.id));
+                  const stepActions = rItem
+                    ? (current.actions ?? []).filter((a) => a.response_id === rItem.id)
+                    : [];
+                  return (
+                    <>
+                      {renderQuestion(step.q, step.c)}
+                      {sortedPhotos.length > 0 && (
+                        <div>
+                          <div className="text-sm font-medium mb-2">
+                            Galerie photos ({sortedPhotos.length})
+                          </div>
+                          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                            {sortedPhotos.map((p) => (
+                              <div key={p.id} className="border rounded-lg overflow-hidden bg-muted/30">
+                                <img
+                                  src={`/api/uploads/${p.file_path}`}
+                                  alt=""
+                                  className="w-full h-64 object-cover"
+                                />
+                                {p.comment && (
+                                  <div className="p-2 text-xs text-muted-foreground">{p.comment}</div>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                      <div>
+                        <div className="text-sm font-medium mb-2">
+                          Actions associées ({stepActions.length})
+                        </div>
+                        {stepActions.length === 0 ? (
+                          <p className="text-xs text-muted-foreground">
+                            Aucune action liée à cet item. Saisissez une "action corrective suggérée" — elle sera créée à la clôture.
+                          </p>
+                        ) : (
+                          <ul className="space-y-1.5">
+                            {stepActions.map((a) => (
+                              <li key={a.id} className="flex items-start gap-2 border rounded p-2 text-sm">
+                                <span className={`mt-0.5 h-2 w-2 rounded-full ${a.status === "done" ? "bg-success" : a.status === "in_progress" ? "bg-warning" : "bg-danger"}`} />
+                                <div className="flex-1">
+                                  <div>{a.description}</div>
+                                  <div className="text-xs text-muted-foreground">
+                                    {a.responsible ?? "—"}{a.due_date ? ` · Échéance ${a.due_date}` : ""} · {a.status}
+                                  </div>
+                                </div>
+                              </li>
+                            ))}
+                          </ul>
+                        )}
+                      </div>
+                    </>
+                  );
+                })()}
               </CardContent>
             </Card>
           )
