@@ -4,57 +4,55 @@ import { useServerFn } from "@tanstack/react-start";
 import { AppLayout } from "@/components/AppLayout";
 import { PageHeader } from "@/components/PageHeader";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Checkbox } from "@/components/ui/checkbox";
-import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
+import { HierarchyFilter, useResolvedFilters } from "@/components/HierarchyFilter";
 import { dashboardData } from "@/lib/api.functions";
-import { pct, scoreText } from "@/lib/scoring";
+import { pct, scoreBg, scoreText } from "@/lib/scoring";
 import {
-  Bar, BarChart, CartesianGrid, Line, LineChart, PolarAngleAxis, PolarGrid,
+  CartesianGrid, Line, LineChart, PolarAngleAxis, PolarGrid,
   Radar, RadarChart, ResponsiveContainer, Tooltip, XAxis, YAxis, PolarRadiusAxis,
 } from "recharts";
 import { format, parseISO, subDays, subMonths, subYears, isAfter, startOfWeek, startOfMonth, startOfQuarter, getQuarter } from "date-fns";
-import { useMemo, useState, useEffect } from "react";
+import { useMemo, useState } from "react";
 
 export const Route = createFileRoute("/")({ component: DashboardPage });
 
-type Period = "week" | "month" | "year" | "all";
+const CRITERIA_FR: Record<string, string> = {
+  Seiri: "Seiri - Trier",
+  Seiton: "Seiton - Ranger",
+  Seiso: "Seiso - Nettoyer",
+  Seiketsu: "Seiketsu - Standardiser",
+  Shitsuke: "Shitsuke - Respecter",
+};
 
 function DashboardPage() {
   const dashFn = useServerFn(dashboardData);
   const { data: d } = useQuery({ queryKey: ["dashboard"], queryFn: () => dashFn() });
 
-  const [sitesSel, setSitesSel] = useState<Set<string>>(new Set());
-  const [uapsSel, setUapsSel] = useState<Set<string>>(new Set());
-  const [gapsSel, setGapsSel] = useState<Set<string>>(new Set());
-  const [period, setPeriod] = useState<Period>("all");
-
-  // Tout coché par défaut au chargement des données
-  useEffect(() => {
-    if (!d) return;
-    setSitesSel(new Set(d.sites.map((s) => s.id)));
-    setUapsSel(new Set(d.uaps.map((u) => u.id)));
-    setGapsSel(new Set(d.gaps.map((g) => g.id)));
-  }, [d]);
+  const hier = useMemo(
+    () => (d ? { sites: d.sites, uaps: d.uaps, gaps: d.gaps } : undefined),
+    [d],
+  );
+  const f = useResolvedFilters(hier);
 
   const dateFloor = useMemo(() => {
     const now = new Date();
-    if (period === "week") return subDays(now, 7);
-    if (period === "month") return subMonths(now, 1);
-    if (period === "year") return subYears(now, 1);
+    if (f.period === "week") return subDays(now, 7);
+    if (f.period === "month") return subMonths(now, 1);
+    if (f.period === "year") return subYears(now, 1);
     return null;
-  }, [period]);
+  }, [f.period]);
 
   const filteredAudits = useMemo(() => {
     if (!d) return [];
     return d.audits.filter((a) => {
-      if (a.site_id && !sitesSel.has(a.site_id)) return false;
-      if (a.uap_id && !uapsSel.has(a.uap_id)) return false;
-      if (a.gap_id && !gapsSel.has(a.gap_id)) return false;
+      if (a.site_id && !f.sites.has(a.site_id)) return false;
+      if (a.uap_id && !f.uaps.has(a.uap_id)) return false;
+      if (a.gap_id && !f.gaps.has(a.gap_id)) return false;
       if (dateFloor && !isAfter(parseISO(a.audit_date), dateFloor)) return false;
       return true;
     });
-  }, [d, sitesSel, uapsSel, gapsSel, dateFloor]);
+  }, [d, f, dateFloor]);
 
   const auditIdSet = useMemo(() => new Set(filteredAudits.map((a) => a.id)), [filteredAudits]);
   const filteredResponses = useMemo(
@@ -78,20 +76,39 @@ function DashboardPage() {
   const radar = (d?.criteria ?? []).map((c) => {
     const rs = filteredResponses.filter((r) => r.criteria_id === c.id && r.score != null);
     const avg = rs.length ? rs.reduce((s, r) => s + (r.score ?? 0), 0) / rs.length : 0;
-    return { criteria: c.name, score: Number(avg.toFixed(2)), fullMark: 5 };
+    return { criteria: CRITERIA_FR[c.name] ?? c.name, score: Number(avg.toFixed(2)), fullMark: 5 };
   });
 
-  const bySite = (d?.sites ?? [])
-    .filter((s) => sitesSel.has(s.id))
+  const bySite = useMemo(() => (d?.sites ?? [])
+    .filter((s) => f.sites.has(s.id))
     .map((s) => {
       const audits = completed.filter((a) => a.site_id === s.id);
       const avg = audits.length ? audits.reduce((x, a) => x + Number(a.global_score ?? 0), 0) / audits.length : 0;
-      return { name: s.name, score: Number(avg.toFixed(2)), count: audits.length };
+      return { id: s.id, name: s.name, score: Number(avg.toFixed(2)), count: audits.length };
     })
     .filter((r) => r.count > 0)
-    .sort((a, b) => b.score - a.score);
+    .sort((a, b) => b.score - a.score),
+    [d, f.sites, completed]);
 
-  // Timeline grouping (day / week / month / quarter)
+  const byGap = useMemo(() => (d?.gaps ?? [])
+    .filter((g) => f.gaps.has(g.id))
+    .map((g) => {
+      const uap = d?.uaps.find((u) => u.id === g.uap_id);
+      const site = uap ? d?.sites.find((s) => s.id === uap.site_id) : undefined;
+      const audits = completed.filter((a) => a.gap_id === g.id);
+      const avg = audits.length ? audits.reduce((x, a) => x + Number(a.global_score ?? 0), 0) / audits.length : 0;
+      return {
+        id: g.id,
+        name: g.name,
+        parent: `${site?.name ?? "—"} / ${uap?.name ?? "—"}`,
+        score: Number(avg.toFixed(2)),
+        count: audits.length,
+      };
+    })
+    .filter((r) => r.count > 0)
+    .sort((a, b) => b.score - a.score),
+    [d, f.gaps, completed]);
+
   const [xAxis, setXAxis] = useState<"day" | "week" | "month" | "quarter">("month");
   const timeline = useMemo(() => {
     const bucketKey = (iso: string) => {
@@ -123,73 +140,21 @@ function DashboardPage() {
       .map(([, v]) => ({ date: v.label, score: Number((v.sum / v.n).toFixed(2)) }));
   }, [completed, xAxis]);
 
-  const toggle = <T,>(set: Set<T>, setSet: (s: Set<T>) => void, id: T) => {
-    const n = new Set(set);
-    if (n.has(id)) n.delete(id); else n.add(id);
-    setSet(n);
-  };
-
   return (
     <AppLayout>
       <div className="p-4 md:p-8 max-w-7xl mx-auto">
         <PageHeader title="Dashboard 5S" description="Vue d'ensemble des performances 5S" />
 
-        {/* Filtres */}
-        <Card className="mb-4">
-          <CardHeader className="pb-3">
-            <CardTitle className="text-base">Filtres</CardTitle>
-          </CardHeader>
-          <CardContent className="grid gap-4 md:grid-cols-4">
-            <FilterList
-              title="Sites"
-              items={d?.sites ?? []}
-              selected={sitesSel}
-              onToggle={(id) => toggle(sitesSel, setSitesSel, id)}
-              onAll={() => setSitesSel(new Set((d?.sites ?? []).map((x) => x.id)))}
-              onNone={() => setSitesSel(new Set())}
-            />
-            <FilterList
-              title="UAP"
-              items={(d?.uaps ?? []).filter((u) => sitesSel.has(u.site_id))}
-              selected={uapsSel}
-              onToggle={(id) => toggle(uapsSel, setUapsSel, id)}
-              onAll={() => setUapsSel(new Set((d?.uaps ?? []).map((x) => x.id)))}
-              onNone={() => setUapsSel(new Set())}
-            />
-            <FilterList
-              title="Gaps"
-              items={(d?.gaps ?? []).filter((g) => uapsSel.has(g.uap_id))}
-              selected={gapsSel}
-              onToggle={(id) => toggle(gapsSel, setGapsSel, id)}
-              onAll={() => setGapsSel(new Set((d?.gaps ?? []).map((x) => x.id)))}
-              onNone={() => setGapsSel(new Set())}
-            />
-            <div>
-              <div className="font-medium text-sm mb-2">Période</div>
-              <div className="flex flex-wrap gap-1">
-                {([
-                  ["week", "S-1"],
-                  ["month", "M-1"],
-                  ["year", "A-1"],
-                  ["all", "Tout"],
-                ] as [Period, string][]).map(([v, l]) => (
-                  <Button key={v} size="sm" variant={period === v ? "default" : "outline"} onClick={() => setPeriod(v)}>
-                    {l}
-                  </Button>
-                ))}
-              </div>
-            </div>
-          </CardContent>
-        </Card>
+        <HierarchyFilter hier={hier} />
 
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
           <Kpi label="Note globale moyenne" value={`${pct(avgGlobal)}%`} sub={`${avgGlobal.toFixed(2)}/5`} tone={pct(avgGlobal)} />
           <Kpi label="Audits (filtre)" value={String(completed.length)} sub={`${filteredAudits.length} au total`} />
-          <Link to="/actions" className="block">
-            <Kpi label="Actions ouvertes" value={String(openActions)} sub={`${overdueActions} en retard`} tone={overdueActions > 0 ? 0 : 100} />
+          <Link to="/actions" search={{ status: "open" }} className="block">
+            <Kpi label="Actions ouvertes" value={String(openActions)} sub={overdueActions > 0 ? `${overdueActions} en retard` : "—"} tone={overdueActions > 0 ? 0 : 100} />
           </Link>
-          <Link to="/actions" className="block">
-            <Kpi label="Actions clôturées" value={String(doneActions)} tone={100} />
+          <Link to="/actions" search={{ status: "done" }} className="block">
+            <Kpi label="Actions clôturées" value={String(doneActions)} sub="—" tone={100} />
           </Link>
         </div>
 
@@ -233,20 +198,8 @@ function DashboardPage() {
             </CardContent>
           </Card>
 
-          <Card className="lg:col-span-2">
-            <CardHeader><CardTitle>Classement des sites</CardTitle></CardHeader>
-            <CardContent className="h-72">
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={bySite}>
-                  <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis dataKey="name" />
-                  <YAxis domain={[0, 5]} />
-                  <Tooltip />
-                  <Bar dataKey="score" fill="var(--color-chart-2)" />
-                </BarChart>
-              </ResponsiveContainer>
-            </CardContent>
-          </Card>
+          <PodiumCard title="Classement des sites" rows={bySite} emptyText="Aucun site audité." />
+          <PodiumCard title="Classement des Gaps" rows={byGap} emptyText="Aucun Gap audité." />
 
           <Card className="lg:col-span-2">
             <CardHeader><CardTitle>Galerie photos ({filteredPhotos.length})</CardTitle></CardHeader>
@@ -288,36 +241,49 @@ function DashboardPage() {
   );
 }
 
-function FilterList({
-  title, items, selected, onToggle, onAll, onNone,
+function PodiumCard({
+  title, rows, emptyText,
 }: {
   title: string;
-  items: { id: string; name: string }[];
-  selected: Set<string>;
-  onToggle: (id: string) => void;
-  onAll: () => void;
-  onNone: () => void;
+  rows: { id: string; name: string; parent?: string; score: number; count: number }[];
+  emptyText: string;
 }) {
+  const medals = ["🥇", "🥈", "🥉"];
   return (
-    <div>
-      <div className="flex items-center justify-between mb-1">
-        <div className="font-medium text-sm">{title}</div>
-        <div className="flex gap-1">
-          <button className="text-[10px] uppercase text-muted-foreground hover:text-foreground" onClick={onAll}>Tous</button>
-          <span className="text-muted-foreground">·</span>
-          <button className="text-[10px] uppercase text-muted-foreground hover:text-foreground" onClick={onNone}>Aucun</button>
-        </div>
-      </div>
-      <div className="max-h-32 overflow-y-auto space-y-1 border rounded p-2">
-        {items.length === 0 && <p className="text-xs text-muted-foreground">Aucun</p>}
-        {items.map((it) => (
-          <Label key={it.id} className="flex items-center gap-2 cursor-pointer text-sm font-normal">
-            <Checkbox checked={selected.has(it.id)} onCheckedChange={() => onToggle(it.id)} />
-            <span className="truncate">{it.name}</span>
-          </Label>
-        ))}
-      </div>
-    </div>
+    <Card>
+      <CardHeader><CardTitle>{title}</CardTitle></CardHeader>
+      <CardContent>
+        {rows.length === 0 ? (
+          <p className="text-sm text-muted-foreground">{emptyText}</p>
+        ) : (
+          <ol className="space-y-2">
+            {rows.map((r, i) => {
+              const podium = i < 3;
+              return (
+                <li
+                  key={r.id}
+                  className={`flex items-center gap-3 rounded-lg border p-2.5 ${
+                    podium ? "bg-muted/50 border-primary/30" : ""
+                  }`}
+                >
+                  <div className={`w-8 text-center text-lg ${podium ? "" : "text-muted-foreground text-sm"}`}>
+                    {podium ? medals[i] : `#${i + 1}`}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="font-medium truncate">{r.name}</div>
+                    {r.parent && <div className="text-xs text-muted-foreground truncate">{r.parent}</div>}
+                    <div className="text-xs text-muted-foreground">{r.count} audit{r.count > 1 ? "s" : ""}</div>
+                  </div>
+                  <div className={`px-2 py-1 rounded text-xs font-semibold ${scoreBg(r.score)}`}>
+                    {r.score.toFixed(2)}/5 · {pct(r.score)}%
+                  </div>
+                </li>
+              );
+            })}
+          </ol>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 
@@ -325,11 +291,11 @@ function Kpi({ label, value, sub, tone }: { label: string; value: string; sub?: 
   const toneClass =
     tone == null ? "text-foreground" : tone >= 75 ? scoreText(4) : tone >= 50 ? scoreText(2.7) : scoreText(1);
   return (
-    <Card>
-      <CardContent className="p-4">
+    <Card className="h-full">
+      <CardContent className="p-4 h-full flex flex-col">
         <div className="text-xs uppercase tracking-wide text-muted-foreground">{label}</div>
         <div className={`text-3xl font-bold mt-1 ${toneClass}`}>{value}</div>
-        {sub && <div className="text-xs text-muted-foreground mt-1">{sub}</div>}
+        <div className="text-xs text-muted-foreground mt-1 min-h-[1rem]">{sub ?? ""}</div>
       </CardContent>
     </Card>
   );
